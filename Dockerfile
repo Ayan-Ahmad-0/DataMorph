@@ -25,9 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user (UID 1000) for Hugging Face Spaces compatibility
-RUN useradd -m -u 1000 user
-
 # Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
@@ -47,15 +44,12 @@ COPY demo.py .
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /build/dist ./frontend/dist
 
-# Set ownership of /app to user 1000 for non-root execution
-RUN mkdir -p /app/data && chown -R user:user /app
+# Set up directory for dataset storage
+RUN mkdir -p /app/data
 
-USER user
-
-# Support both custom port (Hugging Face default 7860 or standard 8000)
+# Support both custom port (standard 8000 or custom)
 ENV PORT=8000
 EXPOSE 8000
-EXPOSE 7860
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
