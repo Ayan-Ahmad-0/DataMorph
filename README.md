@@ -1,9 +1,3 @@
----
-title: Datamorph In-Process Tabular Engineering & Intelligence Workspace
-sdk: docker
-app_port: 8000
----
-
 # Datamorph In-Process Tabular Engineering & Intelligence Workspace
 High-performance tabular workspace unifying multi-format ingestion, single-pass profiling, automated cleaning, relational ERD modeling, sandboxed SQL exploration, instant visualization, and multi-tenant data privacy powered by DuckDB, sqlglot, Plotly, and Google Gemini. Ingests 1 to 5 GB datasets with zero-loss all-varchar staging, models relational ERDs with in-process DuckDB joins, compiles sandboxed analytical charts in <15ms, enforces automated 24-hour TTL storage scavenging, and isolates tenant data across 344 automated tests.
 
