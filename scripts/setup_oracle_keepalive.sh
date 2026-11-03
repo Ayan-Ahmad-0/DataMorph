@@ -31,3 +31,4 @@ crontab -l | grep "stress-ng"
 echo "Running 5-second verification test..."
 /usr/bin/timeout 5s /usr/bin/nice -n 19 /usr/bin/stress-ng --cpu "$CORES" --cpu-load 30 >/dev/null 2>&1 || true
 echo "Keep-alive setup complete and verified!"
+
