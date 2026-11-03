@@ -1,4 +1,4 @@
-const { chromium } = require('playwright');
+const { chromium } = require('./frontend/node_modules/@playwright/test');
 
 async function testUrl(url) {
   console.log(`\n--- Testing ${url} ---`);
