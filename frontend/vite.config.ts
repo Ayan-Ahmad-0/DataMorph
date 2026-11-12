@@ -8,6 +8,31 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor-plotly',
+              test: /node_modules[\\/](plotly\.js-dist-min|react-plotly\.js)/,
+              priority: 30,
+            },
+            {
+              name: 'vendor-export',
+              test: /node_modules[\\/](jspdf|html2canvas)/,
+              priority: 25,
+            },
+            {
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom)[\\/]/,
+              priority: 20,
+            },
+          ],
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api': {

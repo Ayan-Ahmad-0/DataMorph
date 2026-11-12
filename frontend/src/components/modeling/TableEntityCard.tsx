@@ -19,7 +19,7 @@ interface TableEntityCardProps {
   onMouseDownDrag?: (e: React.MouseEvent) => void;
 }
 
-export const TableEntityCard: React.FC<TableEntityCardProps> = ({
+export const TableEntityCard: React.FC<TableEntityCardProps> = React.memo(({
   table,
   isSelected,
   onSelect,

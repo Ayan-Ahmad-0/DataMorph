@@ -187,6 +187,15 @@ export async function getJobDetail(jobId: string): Promise<JobDetailResponse> {
   return res.json();
 }
 
+export async function getJobStatus(jobId: string): Promise<JobMetadata> {
+  const res = await apiFetch(`${API_BASE}/api/jobs/${jobId}/status`);
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new ApiError(errorData.detail || 'Failed to fetch job status.', res.status);
+  }
+  return res.json();
+}
+
 export async function approveAndClean(jobId: string, recipe?: any): Promise<void> {
   const res = await apiFetch(`${API_BASE}/api/jobs/${jobId}/clean`, {
     method: 'POST',
