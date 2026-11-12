@@ -16,6 +16,8 @@ extend-exclude = [
 ]
 
 [tool.ruff.lint]
-select = ["E9", "F63", "F7", "F82", "F401", "W"]
+select = ["E9", "F63", "F7", "F82", "W"]
 ignore = ["W291", "W293"]
 
+[tool.ruff.lint.per-file-ignores]
+"app/**/*.py" = ["E9", "F63", "F7", "F82", "F401", "W"]
