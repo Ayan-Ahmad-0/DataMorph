@@ -137,9 +137,11 @@ def detect_modeling_relationships(session_id: str, user_id: str = Depends(get_cu
         return state.model_dump()
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to detect relationships for session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to detect table relationships.")
 
 
 @router.post("/sessions/{session_id}/relationships")
