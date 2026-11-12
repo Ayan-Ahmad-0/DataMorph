@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
+from core.security import resolve_within_base, sanitize_filename, validate_safe_id
+
 
 def write_json_atomic(path: Path, payload: Any) -> None:
     """Atomically write JSON data via a sibling temp file and os.replace."""
