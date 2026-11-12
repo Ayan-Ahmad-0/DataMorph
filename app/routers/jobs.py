@@ -18,11 +18,13 @@ from app.convert_store import save_convert_job_meta
 from app.dependencies import (
     copy_stream_to_path,
     get_convert_jobs,
+    get_max_upload_bytes,
     get_orchestrator_dep,
     get_retention_manager,
     get_storage,
 )
 from app.models import JobDetailResponse, JobMetadata
+from core.security import resolve_within_base, sanitize_filename, validate_safe_id
 from core.tenant import get_current_tenant_id
 
 logger = logging.getLogger(__name__)

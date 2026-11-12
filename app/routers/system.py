@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.dependencies import get_convert_jobs, get_orchestrator_dep, get_retention_manager
+from core.security import verify_admin_access
 
 router = APIRouter(prefix="/api", tags=["System & Maintenance"])
 
@@ -16,7 +17,7 @@ def health_check():
     return {"status": "ok", "engine": "DuckDB", "service": "data-cleaner-api"}
 
 
-@router.post("/maintenance/cleanup")
+@router.post("/maintenance/cleanup", dependencies=[Depends(verify_admin_access)])
 def trigger_storage_cleanup(max_age_hours: Optional[float] = None):
     """Trigger an on-demand retention sweep across memory and dynamic storage directories."""
     retention_manager = get_retention_manager()
@@ -28,7 +29,7 @@ def trigger_storage_cleanup(max_age_hours: Optional[float] = None):
     return result.to_dict()
 
 
-@router.get("/maintenance/storage")
+@router.get("/maintenance/storage", dependencies=[Depends(verify_admin_access)])
 def get_storage_inventory_and_status():
     """Retrieve disk capacity, active category item counts, and retention policy settings."""
     retention_manager = get_retention_manager()
