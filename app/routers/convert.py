@@ -37,7 +37,8 @@ router = APIRouter(prefix="/api", tags=["Formats & Convert"])
 @router.post("/formats/detect")
 async def detect_uploaded_format(file: UploadFile = File(...)):
     """Sniff and detect the format of an uploaded file without saving permanently."""
-    suffix = Path(file.filename).suffix
+    safe_filename = sanitize_filename(file.filename, fallback="sample.dat")
+    suffix = Path(safe_filename).suffix
     chunk = await file.read(2 * 1024 * 1024)
 
     def _inspect_sample():
@@ -60,7 +61,7 @@ async def detect_uploaded_format(file: UploadFile = File(...)):
             return {
                 "format": format_id,
                 "confidence": confidence,
-                "filename": file.filename,
+                "filename": safe_filename,
                 **extra_info,
             }
         finally:
@@ -77,13 +78,15 @@ async def preview_and_convert(
     options: Optional[str] = Form(None),
 ):
     """Preview an input dataset returning preview rows and ConversionReport."""
-    suffix = Path(file.filename).suffix
+    safe_filename = sanitize_filename(file.filename, fallback="dataset.dat")
+    suffix = Path(safe_filename).suffix
+    max_bytes = get_max_upload_bytes()
 
     def _run_preview():
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            shutil.copyfileobj(file.file, tmp, length=1024 * 1024)
             tmp_path = Path(tmp.name)
         try:
+            copy_stream_to_path(file.file, tmp_path, max_bytes=max_bytes)
             from formats import AdapterRegistry, detect_format
 
             parsed_options = json.loads(options) if options else {}
@@ -125,14 +128,17 @@ async def execute_convert_only(
 
     convert_jobs = get_convert_jobs()
     convert_id = f"conv_{uuid.uuid4().hex[:8]}"
-    work_dir = Path("data/convert_jobs").resolve() / user_id / convert_id
-    input_file_path = work_dir / file.filename
+    safe_filename = sanitize_filename(file.filename, fallback="dataset.dat")
+    convert_root = Path("data/convert_jobs").resolve()
+    work_dir = resolve_within_base(convert_root, user_id, convert_id)
+    input_file_path = resolve_within_base(work_dir, safe_filename)
     parsed_src_opts = json.loads(source_options) if source_options else None
     parsed_tgt_opts = json.loads(target_options) if target_options else None
+    max_bytes = get_max_upload_bytes()
 
     def _run_convert():
         work_dir.mkdir(parents=True, exist_ok=True)
-        copy_stream_to_path(file.file, input_file_path)
+        copy_stream_to_path(file.file, input_file_path, max_bytes=max_bytes)
         return convert_file(
             input_path=input_file_path,
             target_format=target_format,
@@ -149,7 +155,7 @@ async def execute_convert_only(
             "id": convert_id,
             "user_id": user_id,
             "result": result,
-            "filename": file.filename,
+            "filename": safe_filename,
             "work_dir": work_dir,
             "intermediate_parquet": result.intermediate_parquet,
         }
@@ -159,6 +165,9 @@ async def execute_convert_only(
             "convert_id": convert_id,
             "result": result.to_dict(),
         }
+    except HTTPException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
     except Exception as e:
         shutil.rmtree(work_dir, ignore_errors=True)
         logger.exception("Convert-only execution failed: %s", e)
