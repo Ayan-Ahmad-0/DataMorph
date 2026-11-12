@@ -326,7 +326,9 @@ class PostgresConnector(BaseConnector):
         cfg = PostgresConnectorConfig.model_validate(config)
 
         import_query = cfg.query or (options or {}).get("query")
+        clean_query: Optional[str] = None
         if import_query:
+            clean_query = self._validate_import_query(import_query)
             source_desc = "custom query"
         else:
             if not cfg.table_name:
@@ -335,14 +337,14 @@ class PostgresConnector(BaseConnector):
             table = self._sanitize_identifier(cfg.table_name, "table_name")
             source_desc = f"{schema}.{table}"
 
+        conn_str = self._build_connection_string(cfg)
+        conn_str_sql = conn_str.replace("'", "''")
+
         target_parquet_path.parent.mkdir(parents=True, exist_ok=True)
         target_path_str = str(target_parquet_path.resolve()).replace("\\", "/")
 
         con = duckdb.connect(":memory:")
         con.execute("INSTALL postgres; LOAD postgres;")
-
-        conn_str = self._build_connection_string(cfg)
-        conn_str_sql = conn_str.replace("'", "''")
         alias = "pg_source"
 
         try:
@@ -352,8 +354,7 @@ class PostgresConnector(BaseConnector):
             except Exception:
                 pass
 
-            if import_query:
-                clean_query = self._validate_import_query(import_query)
+            if clean_query:
                 source_expr = f"({clean_query})"
             else:
                 source_expr = f"{alias}.{schema}.{table}"
