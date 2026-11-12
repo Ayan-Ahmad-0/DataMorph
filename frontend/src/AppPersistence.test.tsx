@@ -14,7 +14,7 @@ describe('App refresh and session persistence', () => {
   beforeEach(() => {
     window.sessionStorage.clear();
     window.localStorage.clear();
-    window.location.hash = '';
+    window.history.replaceState(null, '', '/');
     vi.restoreAllMocks();
   });
 
@@ -23,7 +23,7 @@ describe('App refresh and session persistence', () => {
   });
 
   it('restores an active cleaning job from URL hash across browser refresh', async () => {
-    window.location.hash = '#clean?step=3&job=job_restore1';
+    window.history.replaceState(null, '', '/#clean?step=3&job=job_restore1');
 
     const getJobDetailSpy = vi.spyOn(api, 'getJobDetail').mockResolvedValue({
       job: {
@@ -60,7 +60,7 @@ describe('App refresh and session persistence', () => {
   });
 
   it('resets cleanly to Step 1 with a notice when restored job returns 404 expired', async () => {
-    window.location.hash = '#clean?step=3&job=job_expired1';
+    window.history.replaceState(null, '', '/#clean?step=3&job=job_expired1');
 
     vi.spyOn(api, 'getJobDetail').mockRejectedValue(
       new ApiError('Job not found or expired.', 404)
