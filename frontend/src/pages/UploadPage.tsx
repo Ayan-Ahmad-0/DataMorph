@@ -172,11 +172,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
             ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
             : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
         }`}
-        style={{
-          backgroundImage: dragActive
-            ? undefined
-            : 'radial-gradient(ellipse at center top, var(--bg-subtle) 0%, transparent 70%)',
-        }}
       >
         <input
           ref={fileInputRef}
