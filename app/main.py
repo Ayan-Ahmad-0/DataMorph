@@ -148,33 +148,35 @@ async def detect_uploaded_format(file: UploadFile = File(...)):
     """Sniff and detect the format of an uploaded file without saving permanently."""
     import tempfile
     suffix = Path(file.filename).suffix
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        # Sniffing only needs the initial sample (magic bytes, headers, delimiters)
-        chunk = await file.read(2 * 1024 * 1024)
-        tmp.write(chunk)
-        tmp_path = Path(tmp.name)
+    chunk = await file.read(2 * 1024 * 1024)
 
-    try:
-        from formats import detect_format, AdapterRegistry
-        format_id, confidence = detect_format(tmp_path)
-        adapter = AdapterRegistry.get(format_id) or AdapterRegistry.find_by_extension(suffix)
-        
-        extra_info: Dict[str, Any] = {}
-        if adapter:
-            if hasattr(adapter, "list_sheets"):
-                extra_info["sheets"] = adapter.list_sheets(tmp_path)
-            if hasattr(adapter, "list_tables"):
-                extra_info["tables"] = adapter.list_tables(tmp_path)
-        
-        return {
-            "format": format_id,
-            "confidence": confidence,
-            "filename": file.filename,
-            **extra_info,
-        }
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    def _inspect_sample():
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(chunk)
+            tmp_path = Path(tmp.name)
+        try:
+            from formats import detect_format, AdapterRegistry
+            format_id, confidence = detect_format(tmp_path)
+            adapter = AdapterRegistry.get(format_id) or AdapterRegistry.find_by_extension(suffix)
+
+            extra_info: Dict[str, Any] = {}
+            if adapter:
+                if hasattr(adapter, "list_sheets"):
+                    extra_info["sheets"] = adapter.list_sheets(tmp_path)
+                if hasattr(adapter, "list_tables"):
+                    extra_info["tables"] = adapter.list_tables(tmp_path)
+
+            return {
+                "format": format_id,
+                "confidence": confidence,
+                "filename": file.filename,
+                **extra_info,
+            }
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    return await run_in_threadpool(_inspect_sample)
 
 
 @app.post("/api/convert")
@@ -186,31 +188,36 @@ async def preview_and_convert(
     """Preview an input dataset returning preview rows and ConversionReport."""
     import tempfile
     suffix = Path(file.filename).suffix
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = Path(tmp.name)
 
-    try:
-        from formats import AdapterRegistry, detect_format
-        parsed_options = json.loads(options) if options else {}
-        fmt = format
-        if not fmt or fmt == "auto":
-            fmt, _ = detect_format(tmp_path)
+    def _run_preview():
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            shutil.copyfileobj(file.file, tmp, length=1024 * 1024)
+            tmp_path = Path(tmp.name)
+        try:
+            from formats import AdapterRegistry, detect_format
+            parsed_options = json.loads(options) if options else {}
+            fmt = format
+            if not fmt or fmt == "auto":
+                fmt, _ = detect_format(tmp_path)
 
-        adapter = AdapterRegistry.get(fmt) or AdapterRegistry.find_by_extension(suffix)
-        if not adapter:
-            raise HTTPException(status_code=400, detail=f"Unsupported format '{fmt}'.")
+            adapter = AdapterRegistry.get(fmt) or AdapterRegistry.find_by_extension(suffix)
+            if not adapter:
+                raise HTTPException(status_code=400, detail=f"Unsupported format '{fmt}'.")
 
-        preview_rows, report = adapter.preview(tmp_path, options=parsed_options, limit=100)
-        return {
-            "preview": preview_rows,
-            "report": report.to_dict(),
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+            preview_rows, report = adapter.preview(tmp_path, options=parsed_options, limit=100)
+            return {
+                "preview": preview_rows,
+                "report": report.to_dict(),
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    return await run_in_threadpool(_run_preview)
 
 
 @app.post("/api/convert/execute")
@@ -224,31 +231,29 @@ async def execute_convert_only(
 ):
     """Execute Convert-Only mode: direct conversion between formats without profiling or cleaning."""
     import uuid
-    import tempfile
     from formats import convert_file
 
     convert_id = f"conv_{uuid.uuid4().hex[:8]}"
     work_dir = Path("data/convert_jobs").resolve() / user_id / convert_id
-    work_dir.mkdir(parents=True, exist_ok=True)
-
     input_file_path = work_dir / file.filename
-    with open(input_file_path, "wb") as buf:
-        shutil.copyfileobj(file.file, buf)
-
     parsed_src_opts = json.loads(source_options) if source_options else None
     parsed_tgt_opts = json.loads(target_options) if target_options else None
 
-    try:
-        result = convert_file(
+    def _run_convert():
+        work_dir.mkdir(parents=True, exist_ok=True)
+        _copy_stream_to_path(file.file, input_file_path)
+        return convert_file(
             input_path=input_file_path,
             target_format=target_format,
             work_dir=work_dir,
             source_format=source_format if source_format and source_format != "auto" else None,
             source_options=parsed_src_opts,
             target_options=parsed_tgt_opts,
-            keep_intermediate=True,  # keep for potential handoff to cleaning
+            keep_intermediate=True,
         )
 
+    try:
+        result = await run_in_threadpool(_run_convert)
         convert_jobs[convert_id] = {
             "id": convert_id,
             "user_id": user_id,
@@ -343,11 +348,7 @@ async def upload_dataset_for_query_only(
 
     query_id = f"query_{uuid.uuid4().hex[:8]}"
     work_dir = Path("data/query_jobs").resolve() / user_id / query_id
-    work_dir.mkdir(parents=True, exist_ok=True)
-
     input_file_path = work_dir / file.filename
-    with open(input_file_path, "wb") as buf:
-        shutil.copyfileobj(file.file, buf, length=1024 * 1024)
 
     parsed_options = None
     if options:
@@ -357,21 +358,26 @@ async def upload_dataset_for_query_only(
             pass
 
     suffix = Path(file.filename).suffix.lower()
+    target_parquet = work_dir / f"{Path(file.filename).stem}.parquet"
 
-    try:
-        detected_fmt, conf = detect_format(input_file_path)
+    def _stage_query_file():
+        work_dir.mkdir(parents=True, exist_ok=True)
+        size_bytes = _copy_stream_to_path(file.file, input_file_path)
+        detected_fmt, _ = detect_format(input_file_path)
         if detected_fmt == "unknown" and suffix in (".csv", ".tsv", ".parquet", ".json", ".ndjson", ".xlsx", ".db", ".sqlite"):
             adapter = AdapterRegistry.find_by_extension(suffix)
             if adapter:
                 detected_fmt = adapter.format_id
-
-        target_parquet = work_dir / f"{Path(file.filename).stem}.parquet"
         conversion_report = convert_to_parquet(
             path=input_file_path,
             out_path=target_parquet,
             format_id=detected_fmt if detected_fmt != "unknown" else None,
             options=parsed_options,
         )
+        return detected_fmt, conversion_report, size_bytes
+
+    try:
+        detected_fmt, conversion_report, size_bytes = await run_in_threadpool(_stage_query_file)
 
         # Register in convert_jobs and persist meta.json so handoff to clean survives restarts
         convert_jobs[query_id] = {
@@ -388,7 +394,7 @@ async def upload_dataset_for_query_only(
             "filename": file.filename,
             "row_count": conversion_report.rows,
             "columns": conversion_report.columns,
-            "file_size_bytes": input_file_path.stat().st_size,
+            "file_size_bytes": size_bytes,
             "detected_format": detected_fmt,
         }
     except Exception as e:
@@ -407,9 +413,9 @@ async def upload_dataset(
     user_id: str = Depends(get_current_tenant_id),
 ):
     """Upload a dataset (CSV, TSV, Parquet, JSON, NDJSON, Excel, SQLite) and schedule pipeline."""
-    from formats import AdapterRegistry, detect_format
+    from formats import AdapterRegistry
     ext = Path(file.filename).suffix.lower()
-    
+
     # Check if supported
     supported_adapter = (
         (format and AdapterRegistry.get(format))
@@ -438,17 +444,28 @@ async def upload_dataset(
         user_id=user_id,
     )
 
-    # Save to tenant storage
+    # Save to tenant storage without blocking the asyncio event loop
     dest_path = storage.raw_file_path(job.id, file.filename, user_id=user_id)
-    with open(dest_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    job.file_size_bytes = dest_path.stat().st_size
+    job.file_size_bytes = await run_in_threadpool(_copy_stream_to_path, file.file, dest_path)
+    orchestrator._save_job_state(job.id)
 
     # Launch background conversion and AI drafting
     background_tasks.add_task(orchestrator.run_profile_and_ai_draft, job.id)
 
     return job
+
+
+@app.get("/api/jobs/{job_id}/status", response_model=JobMetadata)
+def get_job_status_lightweight(job_id: str, user_id: str = Depends(get_current_tenant_id)):
+    """Lightweight polling endpoint returning only JobMetadata without heavy profile/report payloads."""
+    meta = orchestrator.get_job_status_snapshot(job_id, user_id=user_id)
+    if not meta:
+        ttl_h = int(retention_manager.config.ttl_hours)
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job '{job_id}' not found or has expired ({ttl_h}h retention policy). Please re-upload your dataset.",
+        )
+    return meta
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobDetailResponse)
@@ -1477,18 +1494,25 @@ def export_modeling_merged_csv(session_id: str, rel_id: Optional[str] = None, us
     """Execute JOIN and return merged CSV download from DuckDB."""
     import tempfile
     from fastapi.responses import FileResponse
+    tmp_path: Optional[Path] = None
     try:
-        tmp_csv = Path(tempfile.mktemp(suffix=".csv"))
-        modeling_service.export_joined_csv(session_id, tmp_csv, join_rel_id=rel_id, user_id=user_id)
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
+            tmp_path = Path(tf.name)
+        modeling_service.export_joined_csv(session_id, tmp_path, join_rel_id=rel_id, user_id=user_id)
         filename = f"merged_{session_id}.csv" if not rel_id else f"join_{rel_id}.csv"
         return FileResponse(
-            path=str(tmp_csv),
+            path=str(tmp_path),
             media_type="text/csv",
             filename=filename,
+            background=StarletteBackgroundTask(tmp_path.unlink, missing_ok=True),
         )
     except (PermissionError, KeyError):
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
     except Exception as e:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
         logger.exception("Failed to export merged CSV for session %s: %s", session_id, e)
         raise HTTPException(status_code=500, detail=str(e))
 
