@@ -1,12 +1,14 @@
 """Public service API for charts (Section 5 of spec)."""
 
 from __future__ import annotations
+from collections import OrderedDict
 import csv
 from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
 from pathlib import Path
+import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,19 +20,26 @@ from charts.shape import ChartSuggestion, chart_from_result
 from charts.spec import ChartSpec, validate_spec
 from charts.stats import ColumnStats, compute_column_stats
 from charts.suggest import suggest_charts_from_stats
+from core.duckdb_utils import (
+    configure_duckdb_connection,
+    get_chart_concurrency_limits,
+    get_duckdb_memory_limit,
+)
 from explore.limits import ConcurrencyController, QueryLimits
 from explore.sandbox import create_sandboxed_connection
 from explore.service import concurrency_guard, resolve_job_parquet_paths, serialize_cell_value
 
 logger = logging.getLogger(__name__)
 
-# Dedicated concurrency controller for dashboard chart execution
-# Allows up to 10 concurrent chart renders per user and 20 globally with a 15s wait queue
+_global_chart_conc, _per_user_chart_conc = get_chart_concurrency_limits()
+_chart_mem_limit = get_duckdb_memory_limit()
+
+# Dedicated concurrency controller for dashboard chart execution scaled to host RAM
 _chart_limits = QueryLimits(
     query_timeout_seconds=60.0,
-    memory_limit_per_query="2GB",
-    max_concurrent_queries_global=20,
-    max_concurrent_queries_per_user=10,
+    memory_limit_per_query=_chart_mem_limit,
+    max_concurrent_queries_global=_global_chart_conc,
+    max_concurrent_queries_per_user=_per_user_chart_conc,
 )
 _chart_controller = ConcurrencyController(_chart_limits)
 
@@ -57,9 +66,35 @@ class ChartData:
         }
 
 
-# In-memory caches with simple TTL partitioned by tenant
-_stats_cache: Dict[Tuple[str, str], Tuple[float, List[ColumnStats]]] = {}
-_chart_cache: Dict[str, Tuple[float, ChartData]] = {}
+# Bounded LRU + TTL caches partitioned by tenant
+MAX_STATS_CACHE_ENTRIES = 128
+MAX_CHART_CACHE_ENTRIES = 256
+_cache_lock = threading.Lock()
+_stats_cache: OrderedDict[Tuple[str, str], Tuple[float, List[ColumnStats]]] = OrderedDict()
+_chart_cache: OrderedDict[str, Tuple[float, ChartData]] = OrderedDict()
+
+
+def _cache_get(cache: OrderedDict, key: Any, ttl_seconds: float) -> Optional[Any]:
+    now = time.time()
+    with _cache_lock:
+        entry = cache.get(key)
+        if not entry:
+            return None
+        ts, val = entry
+        if now - ts >= ttl_seconds:
+            cache.pop(key, None)
+            return None
+        cache.move_to_end(key)
+        return val
+
+
+def _cache_set(cache: OrderedDict, key: Any, value: Any, max_entries: int) -> None:
+    now = time.time()
+    with _cache_lock:
+        cache[key] = (now, value)
+        cache.move_to_end(key)
+        while len(cache) > max_entries:
+            cache.popitem(last=False)
 
 
 def _get_spec_hash(job_id: str, spec: ChartSpec, user_id: str = "default") -> str:
@@ -75,22 +110,19 @@ def get_column_stats(
 ) -> List[ColumnStats]:
     """Retrieve or compute column stats for a dataset."""
     lim = limits or ChartLimits()
-    now = time.time()
     uid = user_id or "default"
     cache_key = (uid, job_id)
 
-    # Check cache
-    if cache_key in _stats_cache:
-        cached_time, cached_stats = _stats_cache[cache_key]
-        if now - cached_time < lim.chart_cache_ttl_seconds:
-            return cached_stats
+    cached_stats = _cache_get(_stats_cache, cache_key, lim.chart_cache_ttl_seconds)
+    if cached_stats is not None:
+        return cached_stats
 
     clean_pq, orig_pq = resolve_job_parquet_paths(job_id, user_id=uid, storage=storage)
     # Prefer cleaned Parquet if available (e.g. post-cleaning), else staged/raw Parquet
     target_pq = clean_pq if clean_pq and clean_pq.exists() else (orig_pq or clean_pq)
 
     stats = compute_column_stats(target_pq, limits=lim)
-    _stats_cache[cache_key] = (now, stats)
+    _cache_set(_stats_cache, cache_key, stats, MAX_STATS_CACHE_ENTRIES)
     return stats
 
 
@@ -229,12 +261,9 @@ def build_chart(
         spec = apply_page_options(spec, page_options, schema)
 
     cache_key = _get_spec_hash(job_id, spec, user_id=user_id)
-    now = time.time()
-
-    if cache_key in _chart_cache:
-        cached_time, cached_chart = _chart_cache[cache_key]
-        if now - cached_time < lim.chart_cache_ttl_seconds:
-            return cached_chart
+    cached_chart = _cache_get(_chart_cache, cache_key, lim.chart_cache_ttl_seconds)
+    if cached_chart is not None:
+        return cached_chart
 
     # 2. Compile to SQL
     sql, params, notes = compile_spec(spec, schema, limits=lim)
@@ -249,38 +278,40 @@ def build_chart(
             if (spec.x and spec.x.column == col) or (spec.y and spec.y.column == col):
                 notes.append(f"'{col}' read as {cast_t}")
 
-    # 3. Check for cast failure warnings if cast_as is used
+    # 3. Check for cast failure warnings in a single batched Parquet scan
     cast_fields = [f for f in (spec.x, spec.y) if f and not f.formula and f.cast_as in ("number", "date", "timestamp")]
     if cast_fields:
         cast_con = duckdb.connect(":memory:")
+        configure_duckdb_connection(cast_con)
         try:
-            for f in cast_fields:
+            select_exprs = []
+            for idx, f in enumerate(cast_fields):
                 col_q = quote_identifier(f.column)
                 cast_type = "DOUBLE" if f.cast_as == "number" else ("DATE" if f.cast_as == "date" else "TIMESTAMP")
-                chk_sql = f"""
-                SELECT 
-                    COUNT(*) AS total_non_null,
-                    SUM(CASE WHEN TRY_CAST({col_q} AS {cast_type}) IS NULL THEN 1 ELSE 0 END) AS failed_casts
-                FROM read_parquet('{target_pq.as_posix()}')
-                WHERE {col_q} IS NOT NULL
-                """
-                res = cast_con.execute(chk_sql).fetchone()
-                total_nn = res[0] or 0
-                failed_c = res[1] or 0
-                if total_nn > 0 and failed_c > 0:
-                    pct = round((failed_c / total_nn) * 100.0, 1)
-                    warnings.append(
-                        f"{pct}% of '{f.column}' values could not be read as {f.cast_as} and were ignored."
-                    )
+                select_exprs.append(f"COUNT({col_q}) AS nn_{idx}")
+                select_exprs.append(
+                    f"SUM(CASE WHEN {col_q} IS NOT NULL AND TRY_CAST({col_q} AS {cast_type}) IS NULL THEN 1 ELSE 0 END) AS fc_{idx}"
+                )
+            chk_sql = f"SELECT {', '.join(select_exprs)} FROM read_parquet('{target_pq.as_posix()}')"
+            res = cast_con.execute(chk_sql).fetchone()
+            if res:
+                for idx, f in enumerate(cast_fields):
+                    total_nn = res[idx * 2] or 0
+                    failed_c = res[idx * 2 + 1] or 0
+                    if total_nn > 0 and failed_c > 0:
+                        pct = round((failed_c / total_nn) * 100.0, 1)
+                        warnings.append(
+                            f"{pct}% of '{f.column}' values could not be read as {f.cast_as} and were ignored."
+                        )
         except Exception as e:
             logger.warning("Failed to calculate cast warnings: %s", e)
         finally:
             cast_con.close()
 
-    # 4. Execute query with limits & concurrency
+    # 4. Execute query with RAM-tuned limits & concurrency
     q_lim = QueryLimits(
         query_timeout_seconds=lim.chart_query_timeout_seconds,
-        memory_limit_per_query="2GB",
+        memory_limit_per_query=get_duckdb_memory_limit(),
     )
 
     t0 = time.perf_counter()
