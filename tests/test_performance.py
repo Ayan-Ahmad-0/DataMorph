@@ -17,6 +17,7 @@ from app.models import JobStatus
 from app.orchestrator import JobOrchestrator
 from app.storage import JobStorage
 from charts import service as charts_service
+from charts.spec import ChartSpec, FieldRef
 from core import profiler as profiler_module
 from core.duckdb_utils import get_chart_concurrency_limits, get_max_concurrent_pipelines
 from core.profiler import PROFILE_BATCH_SIZE, Profiler
@@ -92,24 +93,24 @@ def test_profiler_batched_wide_dataset_accuracy_and_call_reduction(tmp_path: Pat
         profile = profiler.profile_parquet(parquet_path)
 
     assert PROFILE_BATCH_SIZE == 15
-    assert profile.file.rows == 100
-    assert profile.file.columns == 28
+    assert profile.file_info["rows"] == 100
+    assert profile.file_info["columns"] == 28
     # 28 columns would previously execute ~85-115 queries; batching keeps total SQL calls well under 30
     assert sql_calls[0] <= 25, f"Expected batched SQL queries <= 25, got {sql_calls[0]}"
 
-    by_name = {c.name: c for c in profile.columns}
-    assert by_name["metric_1"].min == -49.0
-    assert by_name["metric_1"].max == 50.0
-    assert by_name["metric_1"].negatives == 49
-    assert by_name["metric_1"].zeros == 1
-    assert by_name["metric_3"].null_count == 10
+    by_name = profile.columns
+    assert by_name["metric_1"].numeric_stats is not None
+    assert by_name["metric_1"].numeric_stats.min == -49.0
+    assert by_name["metric_1"].numeric_stats.max == 50.0
+    assert by_name["metric_1"].numeric_stats.negatives == 49
+    assert by_name["metric_3"].nulls == 10
     assert by_name["str_num_1"].inferred_type == "integer"
-    assert by_name["str_num_1"].null_tokens == 20
-    assert by_name["str_num_1"].leading_trailing_whitespace == 20
+    assert sum(by_name["str_num_1"].null_tokens.values()) == 20
+    assert by_name["str_num_1"].whitespace_issues == 20
     assert by_name["date_str_1"].inferred_type == "date"
     assert by_name["bool_str_1"].inferred_type == "boolean"
-    assert by_name["ws_str_1"].leading_trailing_whitespace == 100
-    assert by_name["sparse_1"].null_count == 97
+    assert by_name["ws_str_1"].whitespace_issues == 100
+    assert by_name["sparse_1"].nulls == 97
     assert by_name["sparse_1"].distinct_count == 3
 
 
@@ -221,28 +222,30 @@ def test_charts_bounded_lru_caches_and_batched_cast_warnings(tmp_path: Path):
     con.execute(
         f"""
         COPY (
-            SELECT '100' AS amount_ok, 'abc' AS amount_bad, 'x' AS grp
+            SELECT '2026-01-01' AS date_str, 'abc' AS amount_bad
             UNION ALL
-            SELECT '200', '250', 'y'
+            SELECT '2026-01-02', '250'
         ) TO '{str(pq_path).replace(chr(92), "/")}' (FORMAT PARQUET);
         """
     )
     con.close()
 
-    res = charts_service.build_chart(
-        "cast_job",
-        pq_path,
-        {
-            "chart_type": "bar",
-            "x": "grp",
-            "y": "amount_bad",
-            "agg": "sum",
-            "cast_fields": {"amount_ok": "DOUBLE", "amount_bad": "DOUBLE"},
-        },
-        ttl_seconds=60,
-    )
+    with patch(
+        "charts.service.resolve_job_parquet_paths",
+        return_value=(pq_path, pq_path),
+    ):
+        res = charts_service.build_chart(
+            "cast_job",
+            user_id="cast_user",
+            spec=ChartSpec(
+                chart_type="bar",
+                x=FieldRef(column="date_str", cast_as="date"),
+                y=FieldRef(column="amount_bad", cast_as="number"),
+                aggregation="sum",
+            ),
+        )
     assert any("amount_bad" in w for w in res.warnings)
-    assert not any("amount_ok" in w for w in res.warnings)
+    assert not any("date_str" in w for w in res.warnings)
 
 
 def test_api_status_endpoint_gzip_and_modeling_export_cleanup(tmp_path: Path):
@@ -298,7 +301,7 @@ def test_api_status_endpoint_gzip_and_modeling_export_cleanup(tmp_path: Path):
             created_tmp_files.append(Path(handle.name))
         return handle
 
-    with patch("app.main.tempfile.NamedTemporaryFile", side_effect=_tracking_ntf):
+    with patch("tempfile.NamedTemporaryFile", side_effect=_tracking_ntf):
         export_resp = client.get(
             f"/api/modeling/sessions/{session_id}/export-csv",
             headers=headers,
