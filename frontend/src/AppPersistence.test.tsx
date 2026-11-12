@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('react-plotly.js', () => ({
+  default: () => null,
+}));
+
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { ApiError } from './lib/api';
@@ -74,3 +79,4 @@ describe('App refresh and session persistence', () => {
     expect(window.location.hash).toBe('#clean');
   });
 });
+

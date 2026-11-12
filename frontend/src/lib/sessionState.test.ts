@@ -86,3 +86,4 @@ describe('sessionState hash and storage helpers', () => {
     expect(loadPersistedSession()).toBeNull();
   });
 });
+

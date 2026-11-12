@@ -201,3 +201,4 @@ def test_gemini_client_falls_back_on_timeout_without_blocking(monkeypatch):
     assert calls == ["gemini-3.5-flash", "gemini-flash-latest"]
     # Must return promptly around timeout (0.15s) rather than blocking on first call's 0.5s sleep
     assert elapsed < 0.4
+

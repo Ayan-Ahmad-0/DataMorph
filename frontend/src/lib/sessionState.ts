@@ -144,3 +144,4 @@ export function clearPersistedSession(): void {
     // Ignore
   }
 }
+
