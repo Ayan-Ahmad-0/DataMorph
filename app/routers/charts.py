@@ -25,7 +25,8 @@ from charts.page_options import PageDataOptions
 from charts.service import ChartData
 from charts.tweak import default_starter_spec, get_tweak_options
 from charts_ai import auto_visualize, chart_from_text, plan_visualization
-from core.tenant import get_current_tenant_id
+from core.security import validate_safe_id
+from core.tenant import get_current_tenant_id, resolve_active_tenant_id
 from explore import DataNotFoundError, ServerBusyError
 
 logger = logging.getLogger(__name__)
