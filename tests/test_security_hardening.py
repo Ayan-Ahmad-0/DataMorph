@@ -194,3 +194,4 @@ def test_rate_limit_middleware_returns_429_and_retry_after():
 
 def test_escape_sql_literal_neutralizes_quotes_and_nul():
     assert escape_sql_literal("o'malley\x00.csv") == "o''malley.csv"
+

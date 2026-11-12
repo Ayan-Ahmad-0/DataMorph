@@ -194,3 +194,4 @@ def verify_admin_access(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Maintenance endpoints require loopback access or ADMIN_API_KEY.",
         )
+
