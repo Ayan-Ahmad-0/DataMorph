@@ -355,7 +355,7 @@ def build_chart(
         elapsed_seconds=elapsed,
     )
 
-    _chart_cache[cache_key] = (now, chart_data)
+    _cache_set(_chart_cache, cache_key, chart_data, MAX_CHART_CACHE_ENTRIES)
     return chart_data
 
 
