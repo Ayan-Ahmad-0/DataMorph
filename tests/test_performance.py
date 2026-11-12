@@ -9,7 +9,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import duckdb
-import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, orchestrator
