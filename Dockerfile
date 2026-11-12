@@ -29,23 +29,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Copy backend application source
+# Copy backend application source (runtime modules only)
 COPY app/ ./app/
 COPY core/ ./core/
 COPY explore/ ./explore/
 COPY formats/ ./formats/
-COPY evaluation/ ./evaluation/
 COPY analyst/ ./analyst/
 COPY charts/ ./charts/
 COPY charts_ai/ ./charts_ai/
 COPY connectors/ ./connectors/
-COPY demo.py .
 
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /build/dist ./frontend/dist
 
-# Set up directory for dataset storage
-RUN mkdir -p /app/data
+# Create non-root runtime user and dataset storage directory
+RUN addgroup --system appuser && adduser --system --ingroup appuser appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 # Support both custom port (standard 8000 or custom)
 ENV PORT=8000

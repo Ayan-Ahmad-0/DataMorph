@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,7 +30,9 @@ from app.routers import (
 from app.storage import JobStorage
 from connectors import connectors_router
 from core.modeling.service import ModelingService
+from core.rate_limit import RateLimitMiddleware
 from core.retention import StorageRetentionManager, retention_daemon_loop
+from core.security import is_production_env
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +79,7 @@ app = FastAPI(
 
 
 @app.middleware("http")
-async def add_cache_headers(request: Request, call_next):
+async def add_security_and_cache_headers(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     if path in ("/", "/index.html") or path.endswith(".html"):
@@ -85,27 +88,40 @@ async def add_cache_headers(request: Request, call_next):
         response.headers["Expires"] = "0"
     elif path.startswith("/assets/") and response.status_code == 200:
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     return response
 
 
-# Compress JSON/text/JS/CSS responses automatically while leaving small payloads untouched
+# Route-tiered rate limiting & HTTP response compression
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# Enable CORS for frontend development
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "https://datamorph.duckdns.org",
+]
+_cors_env = (os.getenv("CORS_ALLOWED_ORIGINS") or "").strip()
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_CORS_ORIGINS
+_cors_regex = (os.getenv("CORS_ALLOW_ORIGIN_REGEX") or "").strip() or (
+    None if is_production_env() else r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ],
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-zA-Z0-9-]+\.)*huggingface\.co$|^https://([a-zA-Z0-9-]+\.)*hf\.space$",
+    allow_origins=_cors_origins,
+    allow_origin_regex=_cors_regex,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-User-Id", "X-Admin-Key", "Authorization"],
 )
 
 # Register domain API routers
