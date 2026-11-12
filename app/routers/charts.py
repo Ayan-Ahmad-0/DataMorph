@@ -87,9 +87,11 @@ def get_dataset_column_stats(job_id: str, user_id: str = Depends(get_current_ten
         return {"job_id": job_id, "columns": [s.to_dict() for s in stats]}
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to retrieve column stats for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to compute column statistics: {e}")
+        raise HTTPException(status_code=500, detail="Failed to compute column statistics.")
 
 
 @router.get("/{job_id}/starter-spec")
@@ -103,9 +105,11 @@ def get_starter_chart_spec(job_id: str, user_id: str = Depends(get_current_tenan
         return {"job_id": job_id, "spec": spec.model_dump()}
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to get starter spec for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to get starter spec: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get starter spec.")
 
 
 @router.post("/{job_id}/tweak-options")
@@ -118,7 +122,7 @@ def get_dataset_tweak_options(
     storage = get_storage()
     try:
         spec_obj = ChartSpec.model_validate(payload.spec) if payload.spec else None
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         options = get_tweak_options(
             job_id=job_id,
             user_id=active_uid,
@@ -128,9 +132,11 @@ def get_dataset_tweak_options(
         return options.model_dump()
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to get tweak options for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to get tweak options: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get tweak options.")
 
 
 @router.get("/{job_id}/suggest")
@@ -142,9 +148,11 @@ def get_chart_suggestions(job_id: str, user_id: str = Depends(get_current_tenant
         return {"job_id": job_id, "suggestions": [s.model_dump() for s in suggestions]}
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to suggest charts for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to generate chart suggestions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate chart suggestions.")
 
 
 @router.post("/{job_id}/build")
@@ -158,7 +166,7 @@ def build_dataset_chart(
     try:
         spec = ChartSpec.model_validate(payload.spec)
         po = PageDataOptions.model_validate(payload.page_options) if payload.page_options else None
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         chart_data = build_chart(
             job_id=job_id,
             user_id=active_uid,
@@ -175,9 +183,11 @@ def build_dataset_chart(
         raise HTTPException(status_code=504, detail=str(e))
     except ServerBusyError as e:
         raise HTTPException(status_code=429, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to build chart for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to execute chart query: {e}")
+        raise HTTPException(status_code=500, detail="Failed to execute chart query.")
 
 
 @router.post("/{job_id}/export")
@@ -189,10 +199,11 @@ def export_dataset_chart(
     """Execute chart aggregation and download the small aggregated data table as CSV."""
     storage = get_storage()
     try:
+        safe_job_id = validate_safe_id(job_id, label="job_id")
         spec = ChartSpec.model_validate(payload.spec)
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         csv_path = export_chart_data(
-            job_id=job_id,
+            job_id=safe_job_id,
             user_id=active_uid,
             spec=spec,
             storage=storage.for_user(active_uid),
@@ -200,15 +211,17 @@ def export_dataset_chart(
         return FileResponse(
             path=csv_path,
             media_type="text/csv",
-            filename=f"chart_data_{job_id}.csv",
+            filename=f"chart_data_{safe_job_id}.csv",
         )
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except InvalidChartSpecError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to export chart for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to export chart data: {e}")
+        raise HTTPException(status_code=500, detail="Failed to export chart data.")
 
 
 @router.post("/{job_id}/validate-formula")
@@ -220,13 +233,15 @@ def validate_dataset_formula(
     """Validate a custom SQL formula against the dataset in DuckDB."""
     storage = get_storage()
     try:
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         return validate_formula(
             job_id=job_id,
             formula=payload.formula,
             user_id=active_uid,
             storage=storage.for_user(active_uid),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to validate formula for %s: %s", job_id, e)
         return {"valid": False, "inferred_type": None, "sample_result": None, "error": str(e)}
@@ -242,21 +257,24 @@ def export_dashboard_html_endpoint(
     try:
         from charts.dashboard_export import generate_dashboard_html
 
+        safe_job_id = validate_safe_id(job_id, label="job_id")
         html_content = generate_dashboard_html(
             title=payload.title or "Executive Data Intelligence Briefing",
-            dataset_name=payload.dataset_name or f"dataset_{job_id}",
+            dataset_name=payload.dataset_name or f"dataset_{safe_job_id}",
             cards_data=payload.cards,
             metadata=payload.metadata,
         )
         return HTMLResponse(
             content=html_content,
             headers={
-                "Content-Disposition": f'attachment; filename="dashboard_{job_id}.html"'
+                "Content-Disposition": f'attachment; filename="dashboard_{safe_job_id}.html"'
             },
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to export dashboard HTML for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to generate dashboard HTML: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate dashboard HTML.")
 
 
 @router.get("/{job_id}/ai/status")
@@ -280,7 +298,7 @@ def get_visualization_plan(
     storage = get_storage()
     try:
         po = PageDataOptions.model_validate(payload.page_options) if payload.page_options else None
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         plan = plan_visualization(
             job_id=job_id,
             user_id=active_uid,
@@ -291,9 +309,11 @@ def get_visualization_plan(
         return plan.to_dict()
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to generate visualization plan for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to generate visualization plan: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate visualization plan.")
 
 
 @router.post("/{job_id}/ai/auto")
@@ -306,7 +326,7 @@ def auto_visualize_charts(
     storage = get_storage()
     try:
         po = PageDataOptions.model_validate(payload.page_options) if payload.page_options else None
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         charts = auto_visualize(
             job_id=job_id,
             user_id=active_uid,
@@ -327,9 +347,11 @@ def auto_visualize_charts(
         }
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to auto-visualize for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to auto-visualize: {e}")
+        raise HTTPException(status_code=500, detail="Failed to auto-visualize charts.")
 
 
 @router.post("/{job_id}/ai/ask")
@@ -342,7 +364,7 @@ def ask_chart_from_text(
     storage = get_storage()
     try:
         po = PageDataOptions.model_validate(payload.page_options) if payload.page_options else None
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         result = chart_from_text(
             job_id=job_id,
             user_id=active_uid,
@@ -353,7 +375,9 @@ def ask_chart_from_text(
         return result.to_dict()
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to process chart text request for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to process chart request: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process chart request.")
 
