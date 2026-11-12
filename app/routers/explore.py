@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_storage
-from core.tenant import get_current_tenant_id
+from core.security import validate_safe_id
+from core.tenant import get_current_tenant_id, resolve_active_tenant_id
 from explore import (
     DataNotFoundError,
     QueryNotAllowedError,
@@ -101,9 +102,11 @@ def execute_explore_query(
         raise HTTPException(status_code=429, detail=str(e))
     except QueryTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Explore query failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Query execution failed due to an internal error.")
 
 
 @router.post("/{job_id}/export")
@@ -121,10 +124,11 @@ def export_explore_query(
             sql=payload.sql,
             storage=storage.for_user(user_id),
         )
+        safe_job_id = validate_safe_id(job_id, label="job_id")
         return FileResponse(
             path=csv_path,
             media_type="text/csv",
-            filename=f"query_result_{job_id[:8]}.csv",
+            filename=f"query_result_{safe_job_id[:8]}.csv",
         )
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -136,9 +140,11 @@ def export_explore_query(
         raise HTTPException(status_code=429, detail=str(e))
     except QueryTooLargeError as e:
         raise HTTPException(status_code=413, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Explore export failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Query export failed due to an internal error.")
 
 
 @router.post("/{job_id}/ask")
@@ -159,7 +165,7 @@ def ask_ai_analyst(
 
     storage = get_storage()
     try:
-        active_uid = user_id if user_id != "default" else (payload.user_id or "default")
+        active_uid = resolve_active_tenant_id(user_id, payload.user_id)
         res = ask(
             job_id=job_id,
             user_id=active_uid,
@@ -177,6 +183,8 @@ def ask_ai_analyst(
         raise HTTPException(status_code=503, detail=e.user_message)
     except LLMBadResponseError as e:
         raise HTTPException(status_code=502, detail=e.user_message)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("AI Analyst failed for job %s: %s", job_id, e)
         raise HTTPException(status_code=500, detail="Failed to process question with AI Analyst.")

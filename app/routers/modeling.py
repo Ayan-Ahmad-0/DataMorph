@@ -163,14 +163,18 @@ async def save_modeling_relationship(session_id: str, request: Request, user_id:
 @router.delete("/sessions/{session_id}/relationships/{rel_id}")
 def delete_modeling_relationship(session_id: str, rel_id: str, user_id: str = Depends(get_current_tenant_id)):
     """Delete a relationship by ID."""
+    validate_safe_id(rel_id, label="rel_id")
     modeling_service = get_modeling_service()
     try:
         modeling_service.delete_relationship(session_id, rel_id, user_id=user_id)
         return {"status": "ok", "deleted": rel_id}
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Failed to delete relationship %s for session %s: %s", rel_id, session_id, e)
+        raise HTTPException(status_code=500, detail="Failed to delete relationship.")
 
 
 @router.post("/sessions/{session_id}/preview-join")
@@ -191,9 +195,11 @@ async def preview_modeling_join(session_id: str, request: Request, user_id: str 
         return result.model_dump()
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to preview join for session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to preview join.")
 
 
 @router.get("/sessions/{session_id}/export")
@@ -205,6 +211,8 @@ def export_modeling_schema(session_id: str, format: str = "mermaid", user_id: st
         return {"format": format, "content": content}
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to export schema for session %s: %s", session_id, e)
         raise HTTPException(status_code=400, detail=str(e))
@@ -218,21 +226,26 @@ def handoff_modeling_to_query(session_id: str, user_id: str = Depends(get_curren
         return modeling_service.create_query_handoff(session_id, user_id=user_id)
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to create query handoff for session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to create query handoff.")
 
 
 @router.get("/sessions/{session_id}/export-csv")
 def export_modeling_merged_csv(session_id: str, rel_id: Optional[str] = None, user_id: str = Depends(get_current_tenant_id)):
     """Execute JOIN and return merged CSV download from DuckDB."""
+    if rel_id is not None:
+        validate_safe_id(rel_id, label="rel_id")
     modeling_service = get_modeling_service()
     tmp_path: Optional[Path] = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tf:
             tmp_path = Path(tf.name)
         modeling_service.export_joined_csv(session_id, tmp_path, join_rel_id=rel_id, user_id=user_id)
-        filename = f"merged_{session_id}.csv" if not rel_id else f"join_{rel_id}.csv"
+        safe_sid = validate_safe_id(session_id, label="session_id")
+        filename = f"merged_{safe_sid}.csv" if not rel_id else f"join_{rel_id}.csv"
         return FileResponse(
             path=str(tmp_path),
             media_type="text/csv",
@@ -243,9 +256,13 @@ def export_modeling_merged_csv(session_id: str, rel_id: Optional[str] = None, us
         if tmp_path and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
         if tmp_path and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
         logger.exception("Failed to export merged CSV for session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to export merged CSV.")
 
