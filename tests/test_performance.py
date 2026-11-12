@@ -127,7 +127,7 @@ def test_profiler_batched_wide_dataset_accuracy_and_call_reduction(tmp_path: Pat
     assert by_name["str_num_1"].inferred_type == "integer"
     assert sum(by_name["str_num_1"].null_tokens.values()) == 20
     assert by_name["str_num_1"].whitespace_issues == 20
-    assert by_name["date_str_1"].inferred_type == "date"
+    assert by_name["date_str_1"].inferred_type == "timestamp"
     assert by_name["bool_str_1"].inferred_type == "boolean"
     assert by_name["ws_str_1"].whitespace_issues == 100
     assert by_name["sparse_1"].nulls == 97
