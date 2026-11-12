@@ -229,10 +229,14 @@ class S3Connector(BaseConnector):
             )
         except Exception as e:
             elapsed = (time.perf_counter() - start_time) * 1000
-            logger.warning("S3 connection test failed: %s", e)
+            err_msg = str(e)
+            for s_key in (config.get("secret_access_key"), config.get("session_token")):
+                if s_key and len(str(s_key).strip()) > 1:
+                    err_msg = err_msg.replace(str(s_key), "••••••••")
+            logger.warning("S3 connection test failed: %s", err_msg)
             return ConnectionTestResult(
                 success=False,
-                message=f"S3 Connection failed: {str(e)}",
+                message=f"S3 Connection failed: {err_msg}",
                 latency_ms=round(elapsed, 2),
             )
         finally:

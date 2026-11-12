@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import duckdb
 from pydantic import BaseModel, Field, field_validator
+import sqlglot
+from sqlglot import exp
 
+from core.security import escape_sql_literal, validate_external_host
 from connectors.base import (
     BaseConnector,
     ConnectionTestResult,
@@ -103,9 +106,9 @@ class PostgresConnector(BaseConnector):
         return clean
 
     def _build_connection_string(self, cfg: PostgresConnectorConfig) -> str:
-        """Construct a safe libpq connection string."""
+        """Construct a safe libpq connection string with SSRF and sslmode validation."""
         host_val = cfg.host.strip()
-        port_val = cfg.port
+        port_val = int(cfg.port)
         user_val = cfg.username
         pwd_val = cfg.password
         db_val = cfg.database
@@ -128,6 +131,12 @@ class PostgresConnector(BaseConnector):
             except Exception:
                 pass
 
+        host_val = validate_external_host(host_val)
+        allowed_ssl = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+        sslmode_val = cfg.sslmode.strip().lower()
+        if sslmode_val not in allowed_ssl:
+            raise ValueError(f"Unsupported sslmode '{cfg.sslmode}'. Allowed: {sorted(allowed_ssl)}")
+
         # Escape single quotes and backslashes in password/user if necessary
         pwd_escaped = pwd_val.replace("\\", "\\\\").replace("'", "\\'")
         user_escaped = user_val.replace("\\", "\\\\").replace("'", "\\'")
@@ -136,8 +145,41 @@ class PostgresConnector(BaseConnector):
 
         return (
             f"host='{host_escaped}' port={port_val} dbname='{db_escaped}' "
-            f"user='{user_escaped}' password='{pwd_escaped}' sslmode='{cfg.sslmode}'"
+            f"user='{user_escaped}' password='{pwd_escaped}' sslmode='{sslmode_val}'"
         )
+
+    def _validate_import_query(self, raw_query: str) -> str:
+        """Strip trailing semicolons and verify query is a single read-only SELECT without local file reads."""
+        clean_query = re.sub(r"[;\s]+$", "", (raw_query or "").strip())
+        if not clean_query:
+            raise ValueError("Custom Postgres import query cannot be empty.")
+
+        stmts = duckdb.extract_statements(clean_query)
+        if len(stmts) != 1 or stmts[0].type != duckdb.StatementType.SELECT:
+            raise ValueError("Custom Postgres import query must be a single read-only SELECT statement.")
+
+        parsed = sqlglot.parse(clean_query, read="postgres")
+        if not parsed or len(parsed) != 1 or not isinstance(parsed[0], (exp.Select, exp.Union)):
+            raise ValueError("Custom Postgres import query must be a single SELECT or UNION query.")
+
+        blocked_prefixes = (
+            "read_",
+            "readcsv",
+            "readparquet",
+            "readjson",
+            "readtext",
+            "readblob",
+            "readxlsx",
+            "http",
+            "duckdb_",
+        )
+        blocked_exact = {"glob", "parquet_scan", "parquet_metadata", "sniff_csv", "sqlite_scan", "current_setting"}
+        for fn in parsed[0].find_all(exp.Func):
+            fn_name = (fn.name if isinstance(fn, exp.Anonymous) else fn.sql_name() or "").lower()
+            if fn_name in blocked_exact or fn_name.startswith(blocked_prefixes):
+                raise ValueError(f"Function '{fn_name}' is not allowed inside custom Postgres import queries.")
+
+        return clean_query
 
     def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
         """Attempt to attach to PostgreSQL and execute a ping query."""
