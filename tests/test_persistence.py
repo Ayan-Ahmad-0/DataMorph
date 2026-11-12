@@ -35,7 +35,7 @@ def test_orchestrator_job_survives_restart(tmp_path: Path):
     detail_before = orch1.get_job_detail(job.id, user_id="tenant_a")
     assert detail_before is not None
     edited_recipe = dict(detail_before.recipe)
-    edited_recipe["global_notes"] = "Persisted user edit note"
+    edited_recipe["confirmations_required"] = ["Persisted user edit note"]
     assert orch1.update_recipe(job.id, edited_recipe, user_id="tenant_a") is not None
 
     # New orchestrator & storage instance simulates full Uvicorn process restart (empty RAM)
@@ -48,6 +48,7 @@ def test_orchestrator_job_survives_restart(tmp_path: Path):
     assert rehydrated_detail.job.status == JobStatus.AWAITING_APPROVAL
     assert rehydrated_detail.profile is not None
     assert rehydrated_detail.recipe is not None
+    assert rehydrated_detail.recipe.get("confirmations_required") == ["Persisted user edit note"]
 
     # Tenant isolation holds on disk rehydration too
     assert orch2.get_job_detail(job.id, user_id="tenant_b") is None

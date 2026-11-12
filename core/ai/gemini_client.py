@@ -1,11 +1,11 @@
 """Google Gemini API client integration for structured recipe and report generation."""
 
 from __future__ import annotations
-import concurrent.futures
 import logging
 import os
+import threading
 import time
-from typing import Optional
+from typing import Any, Callable, Dict, Optional
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -17,11 +17,26 @@ load_dotenv()
 _circuit_broken_until: float = 0.0
 _circuit_breaker_reason: str = ""
 
-# Module-level executor avoids per-call shutdown(wait=True) blocking on TimeoutError
-_SHARED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
-    max_workers=4,
-    thread_name_prefix="gemini-recipe",
-)
+
+def _call_with_timeout(fn: Callable[[], Any], timeout_s: float) -> Any:
+    """Run blocking SDK call on a daemon thread without blocking caller or shutdown on timeout."""
+    result_box: Dict[str, Any] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        try:
+            result_box["value"] = fn()
+        except BaseException as exc:
+            result_box["error"] = exc
+        finally:
+            done.set()
+
+    threading.Thread(target=_runner, daemon=True, name="gemini-recipe-call").start()
+    if not done.wait(timeout=timeout_s):
+        raise TimeoutError(f"Timed out after {timeout_s:.1f}s")
+    if "error" in result_box:
+        raise result_box["error"]
+    return result_box.get("value")
 
 
 def get_gemini_callable(api_key: Optional[str] = None, model_name: str = "gemini-3.5-flash"):
@@ -68,11 +83,10 @@ def get_gemini_callable(api_key: Optional[str] = None, model_name: str = "gemini
                             },
                         )
 
-                    future = _SHARED_EXECUTOR.submit(do_call)
-                    response = future.result(timeout=call_timeout)
+                    response = _call_with_timeout(do_call, call_timeout)
                     return response.text
 
-                except concurrent.futures.TimeoutError:
+                except TimeoutError:
                     logger.warning(
                         "Gemini model %s timed out after %.1fs. Trying next fallback.",
                         m,
