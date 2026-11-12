@@ -167,7 +167,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        className={`bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-5 sm:p-14 text-center transition-all duration-200 border border-dashed ${
+        className={`bg-[var(--bg-surface)] hairline-border rounded-[var(--radius-md)] p-10 sm:p-14 text-center transition-all border-dashed ${
           dragActive
             ? 'border-[var(--accent)] bg-[var(--accent-subtle)]'
             : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
