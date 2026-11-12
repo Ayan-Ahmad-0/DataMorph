@@ -263,17 +263,18 @@ def test_api_status_endpoint_gzip_and_modeling_export_cleanup(tmp_path: Path):
     denied = client.get(f"/api/jobs/{job.id}/status", headers={"X-User-Id": "other_user"})
     assert denied.status_code == 404
 
-    # 2. GZip middleware compresses large payloads cleanly when requested
+    # 2. GZip middleware compresses large payloads (> 1KB) cleanly when requested
     wide_csv = (
         "col_a,col_b,col_c,col_d\n"
-        + "\n".join(f"row_{i},value_{i},extra_{i},{i * 10}" for i in range(120))
+        + "\n".join(f"row_{i},value_{i},extra_text_payload_{i},{i * 10}" for i in range(120))
     ).encode("utf-8")
-    detect_resp = client.post(
-        "/api/convert/detect",
+    convert_resp = client.post(
+        "/api/convert",
         files={"file": ("wide.csv", wide_csv, "text/csv")},
         headers={**headers, "Accept-Encoding": "gzip"},
     )
-    assert detect_resp.status_code == 200
+    assert convert_resp.status_code == 200
+    assert convert_resp.headers.get("content-encoding") == "gzip"
 
     # 3. Modeling CSV export must delete its temporary CSV file once streamed
     sess_resp = client.post("/api/modeling/sessions", headers=headers)
