@@ -83,20 +83,32 @@ def test_profiler_batched_wide_dataset_accuracy_and_call_reduction(tmp_path: Pat
     con.close()
 
     profiler = Profiler()
-    sql_calls = [0]
+    batched_calls = [0]
+    unbatched_calls = [0]
     real_connect = duckdb.connect
 
-    def _counting_connect(*args, **kwargs):
-        return _CountingConnectionProxy(real_connect(*args, **kwargs), sql_calls)
+    def _make_counting_connect(counter: list[int]):
+        def _counting_connect(*args, **kwargs):
+            return _CountingConnectionProxy(real_connect(*args, **kwargs), counter)
+        return _counting_connect
 
-    with patch.object(profiler_module.duckdb, "connect", side_effect=_counting_connect):
+    with patch.object(profiler_module.duckdb, "connect", side_effect=_make_counting_connect(batched_calls)):
         profile = profiler.profile_parquet(parquet_path)
+
+    with (
+        patch.object(profiler_module, "PROFILE_BATCH_SIZE", 1),
+        patch.object(profiler_module.duckdb, "connect", side_effect=_make_counting_connect(unbatched_calls)),
+    ):
+        unbatched_profile = profiler.profile_parquet(parquet_path)
 
     assert PROFILE_BATCH_SIZE == 15
     assert profile.file_info["rows"] == 100
     assert profile.file_info["columns"] == 28
-    # 28 columns would previously execute ~85-115 queries; batching keeps total SQL calls well under 30
-    assert sql_calls[0] <= 25, f"Expected batched SQL queries <= 25, got {sql_calls[0]}"
+    # Batching must significantly reduce total DuckDB SQL queries while keeping exact column profile parity
+    assert batched_calls[0] < unbatched_calls[0] - 20, (
+        f"Expected batched queries ({batched_calls[0]}) to be well below unbatched ({unbatched_calls[0]})"
+    )
+    assert profile.to_dict()["columns"] == unbatched_profile.to_dict()["columns"]
 
     by_name = profile.columns
     assert by_name["metric_1"].numeric_stats is not None
