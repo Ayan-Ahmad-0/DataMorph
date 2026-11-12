@@ -353,12 +353,15 @@ class PostgresConnector(BaseConnector):
                 pass
 
             if import_query:
-                clean_query = re.sub(r"[;\s]+$", "", import_query.strip())
+                clean_query = self._validate_import_query(import_query)
                 source_expr = f"({clean_query})"
             else:
                 source_expr = f"{alias}.{schema}.{table}"
 
-            con.execute(f"COPY (SELECT * FROM {source_expr}) TO '{target_path_str}' (FORMAT PARQUET, COMPRESSION 'ZSTD');")
+            con.execute(
+                f"COPY (SELECT * FROM {source_expr}) TO '{escape_sql_literal(target_path_str)}' "
+                "(FORMAT PARQUET, COMPRESSION 'ZSTD');"
+            )
 
             row_count_res = con.execute(f"SELECT count(*) FROM read_parquet('{target_path_str}')").fetchone()
             row_count = int(row_count_res[0]) if row_count_res else 0
