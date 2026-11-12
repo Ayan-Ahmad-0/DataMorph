@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_storage
+from core.security import escape_sql_literal, validate_safe_id
 from core.tenant import get_current_tenant_id
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,11 @@ def _sync_clean_csv(clean_pq: Path, clean_csv: Path) -> None:
         return
     c_conn = duckdb.connect(":memory:")
     try:
+        src = escape_sql_literal(clean_pq.as_posix())
+        dst = escape_sql_literal(clean_csv.as_posix())
         c_conn.execute(
-            f"COPY (SELECT * FROM read_parquet('{clean_pq.as_posix()}')) "
-            f"TO '{clean_csv.as_posix()}' (HEADER, DELIMITER ',');"
+            f"COPY (SELECT * FROM read_parquet('{src}')) "
+            f"TO '{dst}' (HEADER, DELIMITER ',');"
         )
     finally:
         c_conn.close()
@@ -65,9 +68,11 @@ def detect_job_pii(job_id: str, user_id: str = Depends(get_current_tenant_id)):
         }
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed PII detection for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed PII detection: {e}")
+        raise HTTPException(status_code=500, detail="Failed PII detection due to an internal error.")
 
 
 @router.post("/{job_id}/pii/apply")
