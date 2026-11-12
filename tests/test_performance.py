@@ -83,12 +83,12 @@ def test_profiler_batched_wide_dataset_accuracy_and_call_reduction(tmp_path: Pat
 
     profiler = Profiler()
     sql_calls = [0]
-    real_connect = profiler_module.connect_duckdb
+    real_connect = duckdb.connect
 
     def _counting_connect(*args, **kwargs):
         return _CountingConnectionProxy(real_connect(*args, **kwargs), sql_calls)
 
-    with patch.object(profiler_module, "connect_duckdb", side_effect=_counting_connect):
+    with patch.object(profiler_module.duckdb, "connect", side_effect=_counting_connect):
         profile = profiler.profile_parquet(parquet_path)
 
     assert PROFILE_BATCH_SIZE == 15
@@ -128,7 +128,8 @@ def test_ram_tuned_concurrency_helpers(monkeypatch):
         assert get_chart_concurrency_limits() == (8, 5)
 
     with patch("core.duckdb_utils.get_system_ram_mb", return_value=16384):
-        assert get_max_concurrent_pipelines() == 2
+        with patch("core.duckdb_utils.os.cpu_count", return_value=4):
+            assert get_max_concurrent_pipelines() == 4
         assert get_chart_concurrency_limits() == (12, 8)
 
 
@@ -202,16 +203,17 @@ def test_charts_bounded_lru_caches_and_batched_cast_warnings(tmp_path: Path):
             {"idx": idx},
             charts_service.MAX_STATS_CACHE_ENTRIES,
         )
-        # Touch key_0 partway through so LRU promotion is exercised
-        if idx == 5:
-            charts_service._cache_get(charts_service._stats_cache, "key_0")
+        # Touch key_0 partway through so LRU promotion keeps key_0 alive while older unaccessed keys evict
+        if idx == 20:
+            assert charts_service._cache_get(charts_service._stats_cache, "key_0", ttl_seconds=60.0) == {"idx": 0}
 
     with charts_service._cache_lock:
         assert len(charts_service._stats_cache) == charts_service.MAX_STATS_CACHE_ENTRIES
-    assert charts_service._cache_get(charts_service._stats_cache, "key_1") is None
-    assert charts_service._cache_get(charts_service._stats_cache, f"key_{total_insertions - 1}") == {
-        "idx": total_insertions - 1
-    }
+    assert charts_service._cache_get(charts_service._stats_cache, "key_1", ttl_seconds=60.0) is None
+    assert charts_service._cache_get(charts_service._stats_cache, "key_0", ttl_seconds=60.0) == {"idx": 0}
+    assert charts_service._cache_get(
+        charts_service._stats_cache, f"key_{total_insertions - 1}", ttl_seconds=60.0
+    ) == {"idx": total_insertions - 1}
 
     # Verify single-scan batched cast_fields detection flags invalid cast targets cleanly
     pq_path = tmp_path / "cast_test.parquet"
