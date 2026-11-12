@@ -108,7 +108,7 @@ def apply_job_pii_masking(
         recipe = Recipe(columns=mask_rules)
         compiler = RecipeCompiler()
 
-        temp_pq = clean_pq.parent / f".temp_masked_{job_id[:8]}.parquet"
+        temp_pq = clean_pq.parent / f".temp_masked_{validate_safe_id(job_id, label='job_id')[:8]}.parquet"
         compiler.execute_clean(recipe, clean_pq, temp_pq)
         if temp_pq.exists():
             shutil.move(temp_pq, clean_pq)
@@ -125,9 +125,11 @@ def apply_job_pii_masking(
         }
     except DataNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed applying PII masking for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed applying PII masking: {e}")
+        raise HTTPException(status_code=500, detail="Failed applying PII masking due to an internal error.")
 
 
 @router.post("/{job_id}/wrangle")
@@ -156,9 +158,11 @@ def apply_wrangle_action(
         return result.to_dict()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Wrangle execution failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed wrangling dataset: {e}")
+        raise HTTPException(status_code=500, detail="Failed wrangling dataset due to an internal error.")
 
 
 @router.post("/{job_id}/wrangle/undo")
@@ -176,9 +180,11 @@ def undo_wrangle_action(job_id: str, user_id: str = Depends(get_current_tenant_i
             user_storage.clean_csv_path(job_id, user_id=user_id),
         )
         return result.to_dict()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Wrangle undo failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to undo wrangle action: {e}")
+        raise HTTPException(status_code=500, detail="Failed to undo wrangle action.")
 
 
 @router.post("/{job_id}/wrangle/reset")
@@ -196,9 +202,11 @@ def reset_wrangle_actions(job_id: str, user_id: str = Depends(get_current_tenant
             user_storage.clean_csv_path(job_id, user_id=user_id),
         )
         return result.to_dict()
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Wrangle reset failed for job %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to reset wrangle actions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset wrangle actions.")
 
 
 @router.get("/{job_id}/wrangle/history")
@@ -216,7 +224,9 @@ def get_wrangle_history(job_id: str, user_id: str = Depends(get_current_tenant_i
             "history": history,
             "can_undo": len(history) > 0,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to get wrangle history for %s: %s", job_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to get wrangle history: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get wrangle history.")
 
