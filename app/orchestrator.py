@@ -1,13 +1,14 @@
 """Job state machine and pipeline execution orchestrator."""
 
 from __future__ import annotations
+from contextlib import contextmanager
 import json
 import logging
 import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Generator, List, Optional
 import duckdb
 
 from app.models import JobDetailResponse, JobMetadata, JobStatus
@@ -16,7 +17,7 @@ from core.ai.gemini_client import get_gemini_callable
 from core.ai.generator import AIRecipeGenerator, AIReportResult
 from core.compiler import RecipeCompiler
 from core.converter import Converter
-from core.duckdb_utils import configure_duckdb_connection
+from core.duckdb_utils import configure_duckdb_connection, get_max_concurrent_pipelines
 from core.profiler import Profiler
 from core.recipe_schema import Recipe
 from core.validator import RecipeValidator
@@ -37,6 +38,7 @@ class JobOrchestrator:
     def __init__(self, storage: Optional[JobStorage] = None) -> None:
         self.storage = storage or JobStorage()
         self._persist_lock = threading.RLock()
+        self._pipeline_semaphore = threading.Semaphore(get_max_concurrent_pipelines())
         self.jobs: Dict[str, JobMetadata] = {}
         self.job_profiles: Dict[str, Dict[str, Any]] = {}
         self.job_reports: Dict[str, str] = {}
@@ -262,6 +264,31 @@ class JobOrchestrator:
             self._save_job_state(job_id)
             return stored_recipe
 
+    @contextmanager
+    def _pipeline_slot(self, job_id: str, stage_label: str) -> Generator[None, None, None]:
+        """Limit concurrent heavy DuckDB pipelines according to host RAM without failing queued requests."""
+        acquired = self._pipeline_semaphore.acquire(blocking=False)
+        if not acquired:
+            job = self.jobs.get(job_id)
+            if job:
+                job.current_stage = f"Queued: waiting for an active {stage_label} slot..."
+                self._save_job_state(job_id)
+            self._pipeline_semaphore.acquire()
+        try:
+            yield
+        finally:
+            self._pipeline_semaphore.release()
+
+    def get_job_status_snapshot(self, job_id: str, user_id: Optional[str] = None) -> Optional[JobMetadata]:
+        """Return lightweight JobMetadata with refreshed TTL without cloning full profiles/reports."""
+        job = self.get_job(job_id, user_id=user_id)
+        if not job:
+            return None
+        if job.expires_at:
+            exp = job.expires_at if job.expires_at.tzinfo else job.expires_at.replace(tzinfo=timezone.utc)
+            job.ttl_seconds_remaining = max(0, int((exp - datetime.now(timezone.utc)).total_seconds()))
+        return job
+
     def run_profile_and_ai_draft(self, job_id: str) -> None:
         """Stage 1: Convert raw dataset to canonical Parquet, single-pass profile, and generate AI recipe."""
         job = self.get_job(job_id)
@@ -269,98 +296,99 @@ class JobOrchestrator:
             return
 
         try:
-            # 1. Convert to text Parquet staging
-            job.status = JobStatus.CONVERTING
-            job.current_stage = "Converting input dataset to canonical Parquet staging"
-            job.progress_pct = 25.0
-            self._save_job_state(job_id)
-
-            raw_file = self.storage.raw_file_path(job_id, job.filename, user_id=job.user_id)
-            staged_pq = self.storage.staged_parquet_path(job_id, user_id=job.user_id)
-
-            if not raw_file.exists() and staged_pq.exists():
-                # Direct Parquet staging (e.g. from cloud/warehouse connector import or convert handoff)
-                con = duckdb.connect(":memory:")
-                res = con.execute("SELECT count(*) FROM read_parquet(?)", [str(staged_pq.resolve())]).fetchone()
-                row_cnt = int(res[0]) if res else 0
-                con.close()
-                job.row_count = row_cnt
-                job.detected_format = "parquet"
-                conv_report = {"format": "parquet", "rows": row_cnt, "flattened": False}
-                job.conversion_report = conv_report
-                self.job_conversion_reports[job_id] = conv_report
-            else:
-                # Auto-detect format if not explicitly specified
-                if not job.detected_format:
-                    det_fmt, confidence = detect_format(raw_file)
-                    job.detected_format = det_fmt
-                    job.detected_confidence = confidence
-
-                # Convert to canonical Parquet
-                conv_res = convert_to_parquet(
-                    raw_file,
-                    staged_pq,
-                    format_id=job.detected_format if job.detected_format != "unknown" else None,
-                    options=self.job_adapter_options.get(job_id),
-                )
-                job.row_count = conv_res.rows
-                job.conversion_report = conv_res.to_dict()
-                self.job_conversion_reports[job_id] = conv_res.to_dict()
-
-            # 2. Single-pass Profiling
-            job.status = JobStatus.PROFILING
-            job.current_stage = "Computing statistical profile and data anomalies"
-            job.progress_pct = 50.0
-            self._save_job_state(job_id)
-
-            def _on_profile_progress(pct: float, stage: str):
-                job.progress_pct = round(pct, 1)
-                job.current_stage = stage
-
-            profile = self.profiler.profile_parquet(
-                staged_pq,
-                source_csv_path=raw_file if raw_file.exists() else None,
-                progress_callback=_on_profile_progress,
-            )
-            p_dict = profile.to_dict()
-            self.job_profiles[job_id] = p_dict
-
-            # 3. Fast baseline recipe generation (< 1ms)
-            from core.ai.fallback import MinimalSafeRecipeGenerator
-            base_recipe, base_report, base_questions = MinimalSafeRecipeGenerator.generate(p_dict)
-            with self._persist_lock:
-                self.job_recipes[job_id] = base_recipe
-                self.job_reports[job_id] = base_report
-                self.job_plain_english[job_id] = RecipeValidator.render_plain_english(base_recipe)
-                self.job_questions[job_id] = base_questions
-
-                # Ready for human review immediately (zero-wait approval loading)
-                job.status = JobStatus.AWAITING_APPROVAL
-                job.current_stage = "Awaiting user approval of cleaning plan"
-                job.progress_pct = 100.0
-                job.error = None
+            with self._pipeline_slot(job_id, "profiling"):
+                # 1. Convert to text Parquet staging
+                job.status = JobStatus.CONVERTING
+                job.current_stage = "Converting input dataset to canonical Parquet staging"
+                job.progress_pct = 25.0
                 self._save_job_state(job_id)
 
-            # Asynchronous background AI enhancement (never blocks user review)
-            gemini_fn = get_gemini_callable()
-            if gemini_fn:
-                def _bg_enhance():
-                    try:
-                        ai_gen = AIRecipeGenerator(llm_client=gemini_fn, privacy_mode=job.privacy_mode)
-                        ai_res = ai_gen.generate_report_and_recipe(p_dict)
-                        with self._persist_lock:
-                            current_job = self.jobs.get(job_id)
-                            if current_job and current_job.status == JobStatus.AWAITING_APPROVAL:
-                                self.job_reports[job_id] = ai_res.report_markdown
-                                self.job_recipes[job_id] = ai_res.recipe
-                                self.job_plain_english[job_id] = ai_res.recipe_plain_english
-                                if ai_res.open_questions:
-                                    self.job_questions[job_id] = ai_res.open_questions
-                                self._save_job_state(job_id)
-                    except Exception as ai_err:
-                        logger.debug("Background AI enhancement bypassed: %s", ai_err)
+                raw_file = self.storage.raw_file_path(job_id, job.filename, user_id=job.user_id)
+                staged_pq = self.storage.staged_parquet_path(job_id, user_id=job.user_id)
 
-                threading.Thread(target=_bg_enhance, daemon=True).start()
+                if not raw_file.exists() and staged_pq.exists():
+                    # Direct Parquet staging (e.g. from cloud/warehouse connector import or convert handoff)
+                    con = duckdb.connect(":memory:")
+                    res = con.execute("SELECT count(*) FROM read_parquet(?)", [str(staged_pq.resolve())]).fetchone()
+                    row_cnt = int(res[0]) if res else 0
+                    con.close()
+                    job.row_count = row_cnt
+                    job.detected_format = "parquet"
+                    conv_report = {"format": "parquet", "rows": row_cnt, "flattened": False}
+                    job.conversion_report = conv_report
+                    self.job_conversion_reports[job_id] = conv_report
+                else:
+                    # Auto-detect format if not explicitly specified
+                    if not job.detected_format:
+                        det_fmt, confidence = detect_format(raw_file)
+                        job.detected_format = det_fmt
+                        job.detected_confidence = confidence
+
+                    # Convert to canonical Parquet
+                    conv_res = convert_to_parquet(
+                        raw_file,
+                        staged_pq,
+                        format_id=job.detected_format if job.detected_format != "unknown" else None,
+                        options=self.job_adapter_options.get(job_id),
+                    )
+                    job.row_count = conv_res.rows
+                    job.conversion_report = conv_res.to_dict()
+                    self.job_conversion_reports[job_id] = conv_res.to_dict()
+
+                # 2. Single-pass Profiling
+                job.status = JobStatus.PROFILING
+                job.current_stage = "Computing statistical profile and data anomalies"
+                job.progress_pct = 50.0
+                self._save_job_state(job_id)
+
+                def _on_profile_progress(pct: float, stage: str):
+                    job.progress_pct = round(pct, 1)
+                    job.current_stage = stage
+
+                profile = self.profiler.profile_parquet(
+                    staged_pq,
+                    source_csv_path=raw_file if raw_file.exists() else None,
+                    progress_callback=_on_profile_progress,
+                )
+                p_dict = profile.to_dict()
+                self.job_profiles[job_id] = p_dict
+
+                # 3. Fast baseline recipe generation (< 1ms)
+                from core.ai.fallback import MinimalSafeRecipeGenerator
+                base_recipe, base_report, base_questions = MinimalSafeRecipeGenerator.generate(p_dict)
+                with self._persist_lock:
+                    self.job_recipes[job_id] = base_recipe
+                    self.job_reports[job_id] = base_report
+                    self.job_plain_english[job_id] = RecipeValidator.render_plain_english(base_recipe)
+                    self.job_questions[job_id] = base_questions
+
+                    # Ready for human review immediately (zero-wait approval loading)
+                    job.status = JobStatus.AWAITING_APPROVAL
+                    job.current_stage = "Awaiting user approval of cleaning plan"
+                    job.progress_pct = 100.0
+                    job.error = None
+                    self._save_job_state(job_id)
+
+                # Asynchronous background AI enhancement (never blocks user review)
+                gemini_fn = get_gemini_callable()
+                if gemini_fn:
+                    def _bg_enhance():
+                        try:
+                            ai_gen = AIRecipeGenerator(llm_client=gemini_fn, privacy_mode=job.privacy_mode)
+                            ai_res = ai_gen.generate_report_and_recipe(p_dict)
+                            with self._persist_lock:
+                                current_job = self.jobs.get(job_id)
+                                if current_job and current_job.status == JobStatus.AWAITING_APPROVAL:
+                                    self.job_reports[job_id] = ai_res.report_markdown
+                                    self.job_recipes[job_id] = ai_res.recipe
+                                    self.job_plain_english[job_id] = ai_res.recipe_plain_english
+                                    if ai_res.open_questions:
+                                        self.job_questions[job_id] = ai_res.open_questions
+                                    self._save_job_state(job_id)
+                        except Exception as ai_err:
+                            logger.debug("Background AI enhancement bypassed: %s", ai_err)
+
+                    threading.Thread(target=_bg_enhance, daemon=True).start()
 
         except Exception as e:
             logger.exception("Error during profile and AI drafting: %s", e)
@@ -381,85 +409,86 @@ class JobOrchestrator:
             return
 
         try:
-            job.error = None
-            staged_pq = self.storage.staged_parquet_path(job_id, user_id=job.user_id)
-            raw_file = self.storage.raw_file_path(job_id, job.filename, user_id=job.user_id)
+            with self._pipeline_slot(job_id, "cleaning"):
+                job.error = None
+                staged_pq = self.storage.staged_parquet_path(job_id, user_id=job.user_id)
+                raw_file = self.storage.raw_file_path(job_id, job.filename, user_id=job.user_id)
 
-            # 1. Update recipe if edited by user
-            if approved_recipe_dict:
-                profile_dict = self.job_profiles.get(job_id)
-                if not profile_dict and staged_pq.exists():
-                    p = self.profiler.profile_parquet(staged_pq, source_csv_path=raw_file if raw_file.exists() else None)
-                    profile_dict = p.to_dict()
-                    self.job_profiles[job_id] = profile_dict
-                recipe = RecipeValidator.validate_recipe(approved_recipe_dict, profile_dict)
-                self.job_recipes[job_id] = recipe
-                self.job_plain_english[job_id] = RecipeValidator.render_plain_english(recipe)
-            else:
-                recipe = self.job_recipes.get(job_id)
-                if not recipe:
+                # 1. Update recipe if edited by user
+                if approved_recipe_dict:
                     profile_dict = self.job_profiles.get(job_id)
                     if not profile_dict and staged_pq.exists():
                         p = self.profiler.profile_parquet(staged_pq, source_csv_path=raw_file if raw_file.exists() else None)
                         profile_dict = p.to_dict()
                         self.job_profiles[job_id] = profile_dict
-                    if profile_dict:
-                        from core.ai.fallback import MinimalSafeRecipeGenerator
-                        recipe, _, _ = MinimalSafeRecipeGenerator.generate(profile_dict)
-                        self.job_recipes[job_id] = recipe
-                        self.job_plain_english[job_id] = RecipeValidator.render_plain_english(recipe)
-                    else:
-                        raise ValueError(f"No profile or recipe available for job {job_id}")
-                elif isinstance(recipe, dict):
-                    profile_dict = self.job_profiles.get(job_id)
-                    recipe = RecipeValidator.validate_recipe(recipe, profile_dict)
+                    recipe = RecipeValidator.validate_recipe(approved_recipe_dict, profile_dict)
                     self.job_recipes[job_id] = recipe
-
-            # 2. Execute Cleaning
-            job.status = JobStatus.CLEANING
-            job.current_stage = "Executing DuckDB macro CTE compilation"
-            job.progress_pct = 40.0
-            self._save_job_state(job_id)
-
-            clean_pq = self.storage.clean_parquet_path(job_id, user_id=job.user_id)
-            clean_res = self.compiler.execute_clean(recipe, staged_pq, clean_pq)
-
-            # Export default cleaned CSV for backwards compatibility
-            clean_csv = self.storage.clean_csv_path(job_id, user_id=job.user_id)
-            clean_pq_sql = str(clean_pq).replace("\\", "/")
-            clean_csv_sql = str(clean_csv).replace("\\", "/")
-            conn = duckdb.connect(":memory:")
-            configure_duckdb_connection(conn)
-            conn.execute(f"COPY (SELECT * FROM read_parquet('{clean_pq_sql}')) TO '{clean_csv_sql}' (HEADER, DELIMITER ',');")
-            conn.close()
-
-            # 3. Verification & Delta Comparison
-            job.status = JobStatus.VERIFYING
-            job.current_stage = "Running reconciliation and verification tests"
-            job.progress_pct = 80.0
-            self._save_job_state(job_id)
-
-            before_profile = self.job_profiles.get(job_id)
-            if not before_profile:
-                if staged_pq.exists():
-                    p = self.profiler.profile_parquet(staged_pq, source_csv_path=raw_file if raw_file.exists() else None)
-                    before_profile = p.to_dict()
-                    self.job_profiles[job_id] = before_profile
+                    self.job_plain_english[job_id] = RecipeValidator.render_plain_english(recipe)
                 else:
-                    raise FileNotFoundError(f"Staged parquet not found for verification of job {job_id}")
+                    recipe = self.job_recipes.get(job_id)
+                    if not recipe:
+                        profile_dict = self.job_profiles.get(job_id)
+                        if not profile_dict and staged_pq.exists():
+                            p = self.profiler.profile_parquet(staged_pq, source_csv_path=raw_file if raw_file.exists() else None)
+                            profile_dict = p.to_dict()
+                            self.job_profiles[job_id] = profile_dict
+                        if profile_dict:
+                            from core.ai.fallback import MinimalSafeRecipeGenerator
+                            recipe, _, _ = MinimalSafeRecipeGenerator.generate(profile_dict)
+                            self.job_recipes[job_id] = recipe
+                            self.job_plain_english[job_id] = RecipeValidator.render_plain_english(recipe)
+                        else:
+                            raise ValueError(f"No profile or recipe available for job {job_id}")
+                    elif isinstance(recipe, dict):
+                        profile_dict = self.job_profiles.get(job_id)
+                        recipe = RecipeValidator.validate_recipe(recipe, profile_dict)
+                        self.job_recipes[job_id] = recipe
 
-            v_json_path = self.storage.verification_json_path(job_id, user_id=job.user_id)
-            v_result = self.verifier.verify(clean_pq, before_profile, recipe, output_verification_json=v_json_path)
+                # 2. Execute Cleaning
+                job.status = JobStatus.CLEANING
+                job.current_stage = "Executing DuckDB macro CTE compilation"
+                job.progress_pct = 40.0
+                self._save_job_state(job_id)
 
-            self.job_verifications[job_id] = v_result.to_dict()
+                clean_pq = self.storage.clean_parquet_path(job_id, user_id=job.user_id)
+                clean_res = self.compiler.execute_clean(recipe, staged_pq, clean_pq)
 
-            # 4. Final state
-            job.status = JobStatus.DONE if v_result.status == "PASS" else JobStatus.DONE_WITH_WARNINGS
-            job.current_stage = "Completed successfully" if job.status == JobStatus.DONE else "Completed with warnings"
-            job.progress_pct = 100.0
-            job.completed_at = datetime.now(timezone.utc)
-            job.error = None
-            self._save_job_state(job_id)
+                # Export default cleaned CSV for backwards compatibility
+                clean_csv = self.storage.clean_csv_path(job_id, user_id=job.user_id)
+                clean_pq_sql = str(clean_pq).replace("\\", "/")
+                clean_csv_sql = str(clean_csv).replace("\\", "/")
+                conn = duckdb.connect(":memory:")
+                configure_duckdb_connection(conn)
+                conn.execute(f"COPY (SELECT * FROM read_parquet('{clean_pq_sql}')) TO '{clean_csv_sql}' (HEADER, DELIMITER ',');")
+                conn.close()
+
+                # 3. Verification & Delta Comparison
+                job.status = JobStatus.VERIFYING
+                job.current_stage = "Running reconciliation and verification tests"
+                job.progress_pct = 80.0
+                self._save_job_state(job_id)
+
+                before_profile = self.job_profiles.get(job_id)
+                if not before_profile:
+                    if staged_pq.exists():
+                        p = self.profiler.profile_parquet(staged_pq, source_csv_path=raw_file if raw_file.exists() else None)
+                        before_profile = p.to_dict()
+                        self.job_profiles[job_id] = before_profile
+                    else:
+                        raise FileNotFoundError(f"Staged parquet not found for verification of job {job_id}")
+
+                v_json_path = self.storage.verification_json_path(job_id, user_id=job.user_id)
+                v_result = self.verifier.verify(clean_pq, before_profile, recipe, output_verification_json=v_json_path)
+
+                self.job_verifications[job_id] = v_result.to_dict()
+
+                # 4. Final state
+                job.status = JobStatus.DONE if v_result.status == "PASS" else JobStatus.DONE_WITH_WARNINGS
+                job.current_stage = "Completed successfully" if job.status == JobStatus.DONE else "Completed with warnings"
+                job.progress_pct = 100.0
+                job.completed_at = datetime.now(timezone.utc)
+                job.error = None
+                self._save_job_state(job_id)
 
         except Exception as e:
             logger.exception("Error during cleaning and verification: %s", e)
