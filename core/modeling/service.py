@@ -45,32 +45,36 @@ class ModelingService:
 
     def _find_session(self, session_id: str) -> Optional[tuple[Path, str]]:
         """Locate an existing modeling session across tenant partitions or legacy flat directory."""
+        safe_session_id = validate_safe_id(session_id, label="session_id")
         # Check tenant partition
         if self.base_dir.exists():
             for child in self.base_dir.iterdir():
                 if child.is_dir():
-                    state_candidate = child / session_id / "state.json"
+                    state_candidate = resolve_within_base(child, safe_session_id, "state.json")
                     if state_candidate.exists():
-                        return child / session_id, child.name
+                        return resolve_within_base(child, safe_session_id), child.name
 
         # Check legacy flat directory
-        legacy_state = self.base_dir / session_id / "state.json"
+        legacy_state = resolve_within_base(self.base_dir, safe_session_id, "state.json")
         if legacy_state.exists():
-            return self.base_dir / session_id, "default"
+            return resolve_within_base(self.base_dir, safe_session_id), "default"
 
         return None
 
     def _get_session_dir(self, session_id: str, user_id: Optional[str] = None) -> Path:
+        safe_session_id = validate_safe_id(session_id, label="session_id")
         uid = user_id or "default"
+        if uid != "default":
+            uid = validate_safe_id(uid, label="user_id")
         # If session already exists in legacy or tenant dir, return it
-        found = self._find_session(session_id)
+        found = self._find_session(safe_session_id)
         if found:
             s_dir, owner = found
             if user_id is not None and owner != user_id:
                 raise PermissionError(f"User '{user_id}' does not have access to modeling session '{session_id}'")
             return s_dir
 
-        s_dir = self.base_dir / uid / session_id
+        s_dir = resolve_within_base(self.base_dir, uid, safe_session_id)
         s_dir.mkdir(parents=True, exist_ok=True)
         (s_dir / "tables").mkdir(parents=True, exist_ok=True)
         return s_dir
