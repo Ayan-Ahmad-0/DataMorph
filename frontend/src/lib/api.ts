@@ -169,10 +169,20 @@ export function uploadDataset(
   });
 }
 
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 export async function getJobDetail(jobId: string): Promise<JobDetailResponse> {
   const res = await apiFetch(`${API_BASE}/api/jobs/${jobId}`);
   if (!res.ok) {
-    throw new Error('Failed to fetch job detail.');
+    const errorData = await res.json().catch(() => ({}));
+    throw new ApiError(errorData.detail || 'Failed to fetch job detail.', res.status);
   }
   return res.json();
 }

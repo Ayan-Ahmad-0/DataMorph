@@ -10,46 +10,163 @@ import { QueryPage } from './pages/QueryPage';
 import { VisualizePage } from './pages/VisualizePage';
 import { ModelPage } from './pages/ModelPage';
 import {
+  ApiError,
   approveAndClean,
   getJobDetail,
   type JobDetailResponse,
   type QueryUploadResult,
   type QueryHandoffResult,
 } from './lib/api';
-import { formatNumber } from './lib/format';
+import { formatBytes, formatNumber } from './lib/format';
+import {
+  buildHashState,
+  clearPersistedSession,
+  loadPersistedSession,
+  parseHashState,
+  savePersistedSession,
+  type AppMode,
+} from './lib/sessionState';
 
-type AppMode = 'clean' | 'convert' | 'query' | 'visualize' | 'model';
+function resolveInitialState() {
+  const hasExplicitHash = typeof window !== 'undefined' && window.location.hash.length > 1;
+  const parsed = parseHashState();
+  const stored = loadPersistedSession();
 
-function parseHashState(): { mode: AppMode; step: number } {
-  if (typeof window === 'undefined') return { mode: 'clean', step: 1 };
-  const hash = window.location.hash.replace(/^#/, '');
-  const [modePart, queryPart] = hash.split('?');
-  const validModes: AppMode[] = ['clean', 'convert', 'query', 'visualize', 'model'];
-  const mode = validModes.includes(modePart as AppMode) ? (modePart as AppMode) : 'clean';
-  let step = 1;
-  if (queryPart) {
-    const params = new URLSearchParams(queryPart);
-    const parsedStep = parseInt(params.get('step') || '1', 10);
-    if (!isNaN(parsedStep) && parsedStep >= 1 && parsedStep <= 5) {
-      step = parsedStep;
+  if (hasExplicitHash) {
+    const cleanJobId =
+      parsed.mode === 'clean'
+        ? (parsed.jobId ?? (stored?.appMode === 'clean' ? stored.jobId : null))
+        : (stored?.jobId ?? null);
+
+    const safeStep =
+      parsed.mode === 'clean' && parsed.step > 1 && !cleanJobId ? 1 : parsed.step;
+
+    let visTarget = stored?.visualizeTarget ?? null;
+    if (parsed.mode === 'visualize' && parsed.jobId) {
+      if (!visTarget || visTarget.query_id !== parsed.jobId) {
+        visTarget = {
+          query_id: parsed.jobId,
+          filename: parsed.targetName || 'Dataset',
+          row_count: 0,
+          file_size_bytes: 0,
+          columns: [],
+        };
+      }
     }
+
+    let qTarget = stored?.queryTarget ?? null;
+    if (parsed.mode === 'query' && parsed.jobId) {
+      if (!qTarget || qTarget.query_id !== parsed.jobId) {
+        qTarget = {
+          query_id: parsed.jobId,
+          filename: parsed.targetName || 'Dataset',
+          row_count: 0,
+          file_size_bytes: 0,
+          columns: [],
+          detected_format: 'PARQUET',
+        };
+      }
+    }
+
+    return {
+      appMode: parsed.mode,
+      currentStep: safeStep,
+      jobId: cleanJobId,
+      fileMeta:
+        cleanJobId && stored?.fileMeta
+          ? stored.fileMeta
+          : { name: '', sizeFormatted: '', rowCountFormatted: '' },
+      visualizeTarget: visTarget,
+      visualizeReturnMode: stored?.visualizeReturnMode ?? null,
+      queryTarget: qTarget,
+      queryInitialSql: stored?.queryInitialSql,
+      queryInitialMode: parsed.queryMode ?? stored?.queryInitialMode ?? ('ask_ai' as const),
+    };
   }
-  return { mode, step };
+
+  if (stored) {
+    const safeStep =
+      stored.appMode === 'clean' && stored.currentStep > 1 && !stored.jobId
+        ? 1
+        : stored.currentStep;
+    return {
+      appMode: stored.appMode,
+      currentStep: safeStep,
+      jobId: stored.jobId,
+      fileMeta: stored.fileMeta || { name: '', sizeFormatted: '', rowCountFormatted: '' },
+      visualizeTarget: stored.visualizeTarget ?? null,
+      visualizeReturnMode: stored.visualizeReturnMode ?? null,
+      queryTarget: stored.queryTarget ?? null,
+      queryInitialSql: stored.queryInitialSql,
+      queryInitialMode: stored.queryInitialMode || ('ask_ai' as const),
+    };
+  }
+
+  return {
+    appMode: 'clean' as AppMode,
+    currentStep: 1,
+    jobId: null,
+    fileMeta: { name: '', sizeFormatted: '', rowCountFormatted: '' },
+    visualizeTarget: null,
+    visualizeReturnMode: null,
+    queryTarget: null,
+    queryInitialSql: undefined,
+    queryInitialMode: 'ask_ai' as const,
+  };
 }
 
 export function App() {
-  const initialHash = parseHashState();
-  const [appMode, setAppMode] = useState<AppMode>(initialHash.mode);
-  const [currentStep, setCurrentStep] = useState<number>(initialHash.step);
+  const initialState = useMemo(() => resolveInitialState(), []);
+  const [appMode, setAppMode] = useState<AppMode>(initialState.appMode);
+  const [currentStep, setCurrentStep] = useState<number>(initialState.currentStep);
   const isNavigatingFromPopstate = useRef(false);
   const hasInitializedHistory = useRef(false);
 
-  // Synchronize navigation state with browser history for back/forward support
+  const [jobId, setJobId] = useState<string | null>(initialState.jobId);
+  const [jobData, setJobData] = useState<JobDetailResponse | null>(null);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  const [visualizeTarget, setVisualizeTarget] = useState<QueryUploadResult | null>(initialState.visualizeTarget);
+  const [visualizeReturnMode, setVisualizeReturnMode] = useState<'clean' | 'convert' | null>(initialState.visualizeReturnMode);
+  const [queryTarget, setQueryTarget] = useState<QueryUploadResult | null>(initialState.queryTarget);
+  const [queryInitialSql, setQueryInitialSql] = useState<string | undefined>(initialState.queryInitialSql);
+  const [queryInitialMode, setQueryInitialMode] = useState<'sql' | 'ask_ai'>(initialState.queryInitialMode);
+
+  const [fileMeta, setFileMeta] = useState<{
+    name: string;
+    sizeFormatted: string;
+    rowCountFormatted: string;
+  }>(initialState.fileMeta);
+
+  // Synchronize navigation & active session state with URL hash, history, and sessionStorage
   useEffect(() => {
+    const nextHash = buildHashState({
+      mode: appMode,
+      step: currentStep,
+      jobId,
+      visualizeTarget,
+      queryTarget,
+      queryInitialMode,
+    });
+
+    if (appMode === 'clean' && currentStep === 1 && !jobId) {
+      clearPersistedSession();
+    } else {
+      savePersistedSession({
+        appMode,
+        currentStep,
+        jobId,
+        fileMeta,
+        visualizeTarget,
+        visualizeReturnMode,
+        queryTarget,
+        queryInitialSql,
+        queryInitialMode,
+      });
+    }
+
     if (!hasInitializedHistory.current) {
       hasInitializedHistory.current = true;
-      const initialHashStr = `#${appMode}${appMode === 'clean' && currentStep > 1 ? `?step=${currentStep}` : ''}`;
-      window.history.replaceState({ appMode, currentStep }, '', initialHashStr);
+      window.history.replaceState({ appMode, currentStep, jobId }, '', nextHash);
       return;
     }
 
@@ -58,11 +175,20 @@ export function App() {
       return;
     }
 
-    const nextHash = `#${appMode}${appMode === 'clean' && currentStep > 1 ? `?step=${currentStep}` : ''}`;
     if (window.location.hash !== nextHash) {
-      window.history.pushState({ appMode, currentStep }, '', nextHash);
+      window.history.pushState({ appMode, currentStep, jobId }, '', nextHash);
     }
-  }, [appMode, currentStep]);
+  }, [
+    appMode,
+    currentStep,
+    jobId,
+    fileMeta,
+    visualizeTarget,
+    visualizeReturnMode,
+    queryTarget,
+    queryInitialSql,
+    queryInitialMode,
+  ]);
 
   // Handle browser back and forward button clicks (popstate)
   useEffect(() => {
@@ -73,70 +199,107 @@ export function App() {
         if (event.state.currentStep) {
           setCurrentStep(event.state.currentStep);
         }
+        if (event.state.jobId !== undefined) {
+          setJobId(event.state.jobId);
+        }
       } else {
-        const { mode, step } = parseHashState();
-        setAppMode(mode);
-        setCurrentStep(step);
+        const parsed = parseHashState();
+        setAppMode(parsed.mode);
+        setCurrentStep(parsed.mode === 'clean' && parsed.step > 1 && !parsed.jobId ? 1 : parsed.step);
+        if (parsed.mode === 'clean') {
+          setJobId(parsed.jobId);
+        }
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [jobData, setJobData] = useState<JobDetailResponse | null>(null);
-  const [visualizeTarget, setVisualizeTarget] = useState<QueryUploadResult | null>(null);
-  const [visualizeReturnMode, setVisualizeReturnMode] = useState<'clean' | 'convert' | null>(null);
-  const [queryTarget, setQueryTarget] = useState<QueryUploadResult | null>(null);
-  const [queryInitialSql, setQueryInitialSql] = useState<string | undefined>(undefined);
-  const [queryInitialMode, setQueryInitialMode] = useState<'sql' | 'ask_ai'>('ask_ai');
 
-  const [fileMeta, setFileMeta] = useState<{
-    name: string;
-    sizeFormatted: string;
-    rowCountFormatted: string;
-  }>({
-    name: '',
-    sizeFormatted: '',
-    rowCountFormatted: '',
-  });
-
-  // Polling job detail from FastAPI backend
+  // Hydrate & poll job detail from FastAPI backend
   useEffect(() => {
     if (!jobId) return;
 
-    const interval = setInterval(async () => {
+    let cancelled = false;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    const terminalStatuses = new Set(['DONE', 'DONE_WITH_WARNINGS', 'FAILED', 'CANCELLED']);
+
+    const fetchAndSync = async () => {
       try {
         const detail = await getJobDetail(jobId);
-        setJobData(detail);
+        if (cancelled) return;
 
-        // Update row count if available from profile
-        if (detail.profile?.file?.rows) {
-          setFileMeta((prev) => ({
-            ...prev,
-            rowCountFormatted: formatNumber(detail.profile.file.rows),
-          }));
-        }
+        setJobData(detail);
+        setSessionNotice(null);
+
+        setFileMeta((prev) => ({
+          name: detail.job.filename || prev.name,
+          sizeFormatted:
+            detail.job.file_size_bytes > 0
+              ? formatBytes(detail.job.file_size_bytes)
+              : prev.sizeFormatted,
+          rowCountFormatted: detail.profile?.file?.rows
+            ? formatNumber(detail.profile.file.rows)
+            : detail.job.row_count > 0
+              ? formatNumber(detail.job.row_count)
+              : prev.rowCountFormatted,
+        }));
 
         const status = detail.job.status;
-        // Automatic stage transitions
         if (status === 'AWAITING_APPROVAL' && currentStep === 1) {
           setCurrentStep(2);
         } else if ((status === 'DONE' || status === 'DONE_WITH_WARNINGS') && currentStep === 4) {
           setCurrentStep(5);
-        } else if (status === 'AWAITING_APPROVAL' && currentStep === 4) {
-          // Progress must be linear: if approvals are pending, redirect to Step 3 (Approval)
+        } else if (status === 'AWAITING_APPROVAL' && (currentStep === 4 || currentStep === 5)) {
+          // If server restart recovered an interrupted cleaning run back to AWAITING_APPROVAL, return to Approval
           setCurrentStep(3);
+        } else if (status === 'FAILED' && currentStep > 1 && currentStep !== 4) {
+          setCurrentStep(4);
+        }
+
+        if (terminalStatuses.has(status) && intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
         }
       } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+          clearPersistedSession();
+          setJobId(null);
+          setJobData(null);
+          setFileMeta({ name: '', sizeFormatted: '', rowCountFormatted: '' });
+          setCurrentStep(1);
+          setSessionNotice(
+            'Your previous cleaning session expired or is no longer available. Upload a file to start a new job.'
+          );
+          return;
+        }
         console.error('Error polling job status:', err);
       }
-    }, 600);
+    };
 
-    return () => clearInterval(interval);
+    // Fetch immediately on mount/jobId change instead of waiting 600ms
+    fetchAndSync();
+
+    const currentStatus = jobData?.job?.id === jobId ? jobData.job.status : undefined;
+    if (!currentStatus || !terminalStatuses.has(currentStatus)) {
+      intervalId = setInterval(fetchAndSync, 600);
+    }
+
+    return () => {
+      cancelled = true;
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [jobId, currentStep]);
 
   const handleUploadComplete = (info: { id: string; name: string; size: string; rowCount: string }) => {
+    setSessionNotice(null);
+    setJobData(null);
     setJobId(info.id);
     setFileMeta({
       name: info.name,
@@ -163,6 +326,8 @@ export function App() {
   };
 
   const handleRestart = () => {
+    clearPersistedSession();
+    setSessionNotice(null);
     setJobId(null);
     setJobData(null);
     setFileMeta({ name: '', sizeFormatted: '', rowCountFormatted: '' });
@@ -249,6 +414,24 @@ export function App() {
       />
 
       <main className="flex-1 w-full max-w-full overflow-x-hidden flex flex-col">
+        {sessionNotice && (
+          <div
+            role="status"
+            className="mx-auto mt-3 w-full max-w-3xl px-4"
+          >
+            <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-4 py-2.5 text-sm text-[var(--text-secondary)] shadow-sm">
+              <span>{sessionNotice}</span>
+              <button
+                type="button"
+                onClick={() => setSessionNotice(null)}
+                className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] cursor-pointer shrink-0"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Centered Mode Switcher (Clean Data vs Convert Only vs Query Data vs Visualize Data) - responsive with smooth horizontal touch scroll */}
         {currentStep === 1 && (
           <div className="pt-3 sm:pt-5 pb-2 sm:pb-5 w-full max-w-full px-2 sm:px-4 flex justify-start sm:justify-center items-center overflow-x-auto scrollbar-none touch-pan-x">
@@ -303,37 +486,53 @@ export function App() {
             {currentStep === 1 && (
               <UploadPage onUploadComplete={handleUploadComplete} />
             )}
-            {currentStep === 2 && (
-              <ReportPage
-                jobData={jobData}
-                onProceedToApproval={() => setCurrentStep(3)}
-                onGoToUpload={() => setCurrentStep(1)}
-              />
-            )}
-            {currentStep === 3 && (
-              <ApprovalPage
-                jobData={jobData}
-                onStartCleaning={handleStartCleaning}
-                onGoToUpload={() => setCurrentStep(1)}
-              />
-            )}
-            {currentStep === 4 && (
-              <ProgressPage
-                jobData={jobData}
-                onProceedToResults={() => setCurrentStep(5)}
-                onGoToApproval={() => setCurrentStep(3)}
-                onRetry={() => handleStartCleaning(jobData?.recipe)}
-                onCancel={handleRestart}
-                onGoToUpload={() => setCurrentStep(1)}
-              />
-            )}
-            {currentStep === 5 && (
-              <ResultsPage
-                jobData={jobData}
-                onRestart={handleRestart}
-                onGoToUpload={() => setCurrentStep(1)}
-                onHandoffToVisualize={handleHandoffToVisualize}
-              />
+            {currentStep > 1 && jobId && !jobData ? (
+              <div className="flex-1 flex items-center justify-center p-8">
+                <div className="max-w-md w-full rounded-[var(--radius-lg)] border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-6 text-center shadow-[var(--shadow-card)]">
+                  <div className="mx-auto mb-3 h-6 w-6 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+                  <p className="text-sm font-medium text-[var(--text-primary)]">
+                    Restoring your saved session...
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--text-muted)]">
+                    Loading job {jobId}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                {currentStep === 2 && (
+                  <ReportPage
+                    jobData={jobData}
+                    onProceedToApproval={() => setCurrentStep(3)}
+                    onGoToUpload={() => setCurrentStep(1)}
+                  />
+                )}
+                {currentStep === 3 && (
+                  <ApprovalPage
+                    jobData={jobData}
+                    onStartCleaning={handleStartCleaning}
+                    onGoToUpload={() => setCurrentStep(1)}
+                  />
+                )}
+                {currentStep === 4 && (
+                  <ProgressPage
+                    jobData={jobData}
+                    onProceedToResults={() => setCurrentStep(5)}
+                    onGoToApproval={() => setCurrentStep(3)}
+                    onRetry={() => handleStartCleaning(jobData?.recipe)}
+                    onCancel={handleRestart}
+                    onGoToUpload={() => setCurrentStep(1)}
+                  />
+                )}
+                {currentStep === 5 && (
+                  <ResultsPage
+                    jobData={jobData}
+                    onRestart={handleRestart}
+                    onGoToUpload={() => setCurrentStep(1)}
+                    onHandoffToVisualize={handleHandoffToVisualize}
+                  />
+                )}
+              </>
             )}
           </>
         )}

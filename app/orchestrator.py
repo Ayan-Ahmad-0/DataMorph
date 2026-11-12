@@ -4,13 +4,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import duckdb
 
 from app.models import JobDetailResponse, JobMetadata, JobStatus
-from app.storage import JobStorage
+from app.storage import JobStorage, read_json_safe, write_json_atomic
 from core.ai.gemini_client import get_gemini_callable
 from core.ai.generator import AIRecipeGenerator, AIReportResult
 from core.compiler import RecipeCompiler
@@ -35,6 +36,7 @@ class JobOrchestrator:
 
     def __init__(self, storage: Optional[JobStorage] = None) -> None:
         self.storage = storage or JobStorage()
+        self._persist_lock = threading.RLock()
         self.jobs: Dict[str, JobMetadata] = {}
         self.job_profiles: Dict[str, Dict[str, Any]] = {}
         self.job_reports: Dict[str, str] = {}
@@ -49,6 +51,139 @@ class JobOrchestrator:
         self.profiler = Profiler()
         self.compiler = RecipeCompiler()
         self.verifier = Verifier()
+
+    @staticmethod
+    def _normalize_uid(user_id: Optional[str]) -> Optional[str]:
+        if user_id is None:
+            return None
+        if user_id.lower() in ("anonymous", "none"):
+            return "default"
+        return user_id
+
+    def _save_job_state(self, job_id: str) -> None:
+        """Atomically persist full job state snapshot to state.json."""
+        with self._persist_lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                return
+            try:
+                meta_dict = job.model_dump(mode="json")
+                recipe_obj = self.job_recipes.get(job_id)
+                recipe_payload = (
+                    recipe_obj.model_dump(mode="json")
+                    if hasattr(recipe_obj, "model_dump")
+                    else recipe_obj
+                )
+                payload = {
+                    "schema_version": 1,
+                    "expires_at": meta_dict.get("expires_at"),
+                    "metadata": meta_dict,
+                    "profile": self.job_profiles.get(job_id),
+                    "report": self.job_reports.get(job_id),
+                    "recipe": recipe_payload,
+                    "plain_english": self.job_plain_english.get(job_id),
+                    "questions": self.job_questions.get(job_id),
+                    "verification": self.job_verifications.get(job_id),
+                    "adapter_options": self.job_adapter_options.get(job_id),
+                    "conversion_report": self.job_conversion_reports.get(job_id),
+                }
+                state_path = self.storage.state_json_path(job_id, user_id=job.user_id)
+                write_json_atomic(state_path, payload)
+            except Exception as err:
+                logger.warning("Failed to persist state for job '%s': %s", job_id, err)
+
+    def _load_job_state(self, job_id: str, user_id: Optional[str] = None) -> Optional[JobMetadata]:
+        """Attempt to rehydrate a job snapshot from disk on RAM cache miss."""
+        with self._persist_lock:
+            if job_id in self.jobs:
+                existing = self.jobs[job_id]
+                if user_id is not None and self._normalize_uid(existing.user_id) != self._normalize_uid(user_id):
+                    return None
+                return existing
+
+            state_path = self.storage.find_state_json_path(job_id, user_id=user_id)
+            if not state_path:
+                return None
+
+            raw = read_json_safe(state_path)
+            if not isinstance(raw, dict) or not isinstance(raw.get("metadata"), dict):
+                return None
+
+            try:
+                meta = JobMetadata.model_validate(raw["metadata"])
+            except Exception as err:
+                logger.warning("Failed to validate persisted metadata for job '%s': %s", job_id, err)
+                return None
+
+            if user_id is not None and self._normalize_uid(meta.user_id) != self._normalize_uid(user_id):
+                logger.warning(
+                    "Tenant access violation: user '%s' attempted to access job '%s' owned by '%s'",
+                    user_id,
+                    job_id,
+                    meta.user_id,
+                )
+                return None
+
+            if meta.expires_at:
+                exp = meta.expires_at if meta.expires_at.tzinfo else meta.expires_at.replace(tzinfo=timezone.utc)
+                if exp < datetime.now(timezone.utc):
+                    return None
+
+            recipe_obj = None
+            raw_recipe = raw.get("recipe")
+            if raw_recipe is not None:
+                try:
+                    recipe_obj = Recipe.model_validate(raw_recipe)
+                except Exception:
+                    recipe_obj = raw_recipe
+
+            rehydrated_modified = False
+            if meta.status in (JobStatus.CLEANING, JobStatus.VERIFYING):
+                staged_pq = self.storage.staged_parquet_path(job_id, user_id=meta.user_id)
+                if staged_pq.exists() and recipe_obj is not None:
+                    meta.status = JobStatus.AWAITING_APPROVAL
+                    meta.progress_pct = 100.0
+                    meta.current_stage = "Previous cleaning run was interrupted by a server restart. Ready to re-run cleaning."
+                    meta.error = None
+                else:
+                    meta.status = JobStatus.FAILED
+                    meta.current_stage = "Cleaning was interrupted by a server restart."
+                    meta.error = "Cleaning was interrupted by a server restart. Please re-upload the file."
+                rehydrated_modified = True
+            elif meta.status in (
+                JobStatus.UPLOADED,
+                JobStatus.CONVERTING,
+                JobStatus.PROFILING,
+                JobStatus.PROFILED,
+                JobStatus.DRAFTING_RECIPE,
+            ):
+                meta.status = JobStatus.FAILED
+                meta.current_stage = "Processing was interrupted by a server restart."
+                meta.error = "Processing was interrupted by a server restart. Please re-upload the file."
+                rehydrated_modified = True
+
+            self.jobs[job_id] = meta
+            if isinstance(raw.get("profile"), dict):
+                self.job_profiles[job_id] = raw["profile"]
+            if isinstance(raw.get("report"), str):
+                self.job_reports[job_id] = raw["report"]
+            if recipe_obj is not None:
+                self.job_recipes[job_id] = recipe_obj
+            if isinstance(raw.get("plain_english"), list):
+                self.job_plain_english[job_id] = raw["plain_english"]
+            if isinstance(raw.get("questions"), list):
+                self.job_questions[job_id] = raw["questions"]
+            if isinstance(raw.get("verification"), dict):
+                self.job_verifications[job_id] = raw["verification"]
+            if isinstance(raw.get("adapter_options"), dict):
+                self.job_adapter_options[job_id] = raw["adapter_options"]
+            if isinstance(raw.get("conversion_report"), dict):
+                self.job_conversion_reports[job_id] = raw["conversion_report"]
+
+            if rehydrated_modified:
+                self._save_job_state(job_id)
+
+            return meta
 
     def create_job(
         self,
@@ -77,17 +212,19 @@ class JobOrchestrator:
             expires_at=now_utc + timedelta(hours=ttl_hours),
             ttl_seconds_remaining=int(ttl_hours * 3600),
         )
-        self.jobs[job_id] = job
-        if adapter_options:
-            self.job_adapter_options[job_id] = adapter_options
+        with self._persist_lock:
+            self.jobs[job_id] = job
+            if adapter_options:
+                self.job_adapter_options[job_id] = adapter_options
+            self._save_job_state(job_id)
         return job
 
     def get_job(self, job_id: str, user_id: Optional[str] = None) -> Optional[JobMetadata]:
-        """Fetch job metadata, strictly enforcing tenant ownership if user_id is provided."""
+        """Fetch job metadata, rehydrating from disk on cache miss and enforcing tenant ownership."""
         job = self.jobs.get(job_id)
         if not job:
-            return None
-        if user_id is not None and job.user_id != user_id:
+            return self._load_job_state(job_id, user_id=user_id)
+        if user_id is not None and self._normalize_uid(job.user_id) != self._normalize_uid(user_id):
             logger.warning(
                 "Tenant access violation: user '%s' attempted to access job '%s' owned by '%s'",
                 user_id,
@@ -97,9 +234,37 @@ class JobOrchestrator:
             return None
         return job
 
+    def update_recipe(
+        self,
+        job_id: str,
+        recipe_data: Dict[str, Any],
+        user_id: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Update and persist user-edited recipe choices or confirmation answers."""
+        job = self.get_job(job_id, user_id=user_id)
+        if not job:
+            return None
+
+        with self._persist_lock:
+            profile_dict = self.job_profiles.get(job_id)
+            stored_recipe: Any = recipe_data
+            try:
+                stored_recipe = RecipeValidator.validate_recipe(recipe_data, profile_dict)
+            except Exception:
+                try:
+                    stored_recipe = Recipe.model_validate(recipe_data)
+                except Exception:
+                    stored_recipe = recipe_data
+
+            self.job_recipes[job_id] = stored_recipe
+            if hasattr(stored_recipe, "model_dump"):
+                self.job_plain_english[job_id] = RecipeValidator.render_plain_english(stored_recipe)
+            self._save_job_state(job_id)
+            return stored_recipe
+
     def run_profile_and_ai_draft(self, job_id: str) -> None:
         """Stage 1: Convert raw dataset to canonical Parquet, single-pass profile, and generate AI recipe."""
-        job = self.jobs.get(job_id)
+        job = self.get_job(job_id)
         if not job:
             return
 
@@ -108,6 +273,7 @@ class JobOrchestrator:
             job.status = JobStatus.CONVERTING
             job.current_stage = "Converting input dataset to canonical Parquet staging"
             job.progress_pct = 25.0
+            self._save_job_state(job_id)
 
             raw_file = self.storage.raw_file_path(job_id, job.filename, user_id=job.user_id)
             staged_pq = self.storage.staged_parquet_path(job_id, user_id=job.user_id)
@@ -145,6 +311,7 @@ class JobOrchestrator:
             job.status = JobStatus.PROFILING
             job.current_stage = "Computing statistical profile and data anomalies"
             job.progress_pct = 50.0
+            self._save_job_state(job_id)
 
             def _on_profile_progress(pct: float, stage: str):
                 job.progress_pct = round(pct, 1)
@@ -161,33 +328,35 @@ class JobOrchestrator:
             # 3. Fast baseline recipe generation (< 1ms)
             from core.ai.fallback import MinimalSafeRecipeGenerator
             base_recipe, base_report, base_questions = MinimalSafeRecipeGenerator.generate(p_dict)
-            self.job_recipes[job_id] = base_recipe
-            self.job_reports[job_id] = base_report
-            self.job_plain_english[job_id] = RecipeValidator.render_plain_english(base_recipe)
-            self.job_questions[job_id] = base_questions
+            with self._persist_lock:
+                self.job_recipes[job_id] = base_recipe
+                self.job_reports[job_id] = base_report
+                self.job_plain_english[job_id] = RecipeValidator.render_plain_english(base_recipe)
+                self.job_questions[job_id] = base_questions
 
-            # Ready for human review immediately (zero-wait approval loading)
-            job.status = JobStatus.AWAITING_APPROVAL
-            job.current_stage = "Awaiting user approval of cleaning plan"
-            job.progress_pct = 100.0
-            job.error = None
+                # Ready for human review immediately (zero-wait approval loading)
+                job.status = JobStatus.AWAITING_APPROVAL
+                job.current_stage = "Awaiting user approval of cleaning plan"
+                job.progress_pct = 100.0
+                job.error = None
+                self._save_job_state(job_id)
 
             # Asynchronous background AI enhancement (never blocks user review)
             gemini_fn = get_gemini_callable()
             if gemini_fn:
-                import threading
-
                 def _bg_enhance():
                     try:
                         ai_gen = AIRecipeGenerator(llm_client=gemini_fn, privacy_mode=job.privacy_mode)
                         ai_res = ai_gen.generate_report_and_recipe(p_dict)
-                        current_job = self.jobs.get(job_id)
-                        if current_job and current_job.status == JobStatus.AWAITING_APPROVAL:
-                            self.job_reports[job_id] = ai_res.report_markdown
-                            self.job_recipes[job_id] = ai_res.recipe
-                            self.job_plain_english[job_id] = ai_res.recipe_plain_english
-                            if ai_res.open_questions:
-                                self.job_questions[job_id] = ai_res.open_questions
+                        with self._persist_lock:
+                            current_job = self.jobs.get(job_id)
+                            if current_job and current_job.status == JobStatus.AWAITING_APPROVAL:
+                                self.job_reports[job_id] = ai_res.report_markdown
+                                self.job_recipes[job_id] = ai_res.recipe
+                                self.job_plain_english[job_id] = ai_res.recipe_plain_english
+                                if ai_res.open_questions:
+                                    self.job_questions[job_id] = ai_res.open_questions
+                                self._save_job_state(job_id)
                     except Exception as ai_err:
                         logger.debug("Background AI enhancement bypassed: %s", ai_err)
 
@@ -198,6 +367,7 @@ class JobOrchestrator:
             job.status = JobStatus.FAILED
             job.current_stage = f"Profiling failed: {e}"
             job.error = str(e)
+            self._save_job_state(job_id)
 
     def execute_cleaning_and_verification(
         self,
@@ -206,7 +376,7 @@ class JobOrchestrator:
         user_id: Optional[str] = None,
     ) -> None:
         """Stage 2: Execute compiled cleaning SQL and verify output."""
-        job = self.get_job(job_id, user_id=user_id) if user_id else self.jobs.get(job_id)
+        job = self.get_job(job_id, user_id=user_id)
         if not job:
             return
 
@@ -240,11 +410,16 @@ class JobOrchestrator:
                         self.job_plain_english[job_id] = RecipeValidator.render_plain_english(recipe)
                     else:
                         raise ValueError(f"No profile or recipe available for job {job_id}")
+                elif isinstance(recipe, dict):
+                    profile_dict = self.job_profiles.get(job_id)
+                    recipe = RecipeValidator.validate_recipe(recipe, profile_dict)
+                    self.job_recipes[job_id] = recipe
 
             # 2. Execute Cleaning
             job.status = JobStatus.CLEANING
             job.current_stage = "Executing DuckDB macro CTE compilation"
             job.progress_pct = 40.0
+            self._save_job_state(job_id)
 
             clean_pq = self.storage.clean_parquet_path(job_id, user_id=job.user_id)
             clean_res = self.compiler.execute_clean(recipe, staged_pq, clean_pq)
@@ -262,6 +437,7 @@ class JobOrchestrator:
             job.status = JobStatus.VERIFYING
             job.current_stage = "Running reconciliation and verification tests"
             job.progress_pct = 80.0
+            self._save_job_state(job_id)
 
             before_profile = self.job_profiles.get(job_id)
             if not before_profile:
@@ -283,12 +459,14 @@ class JobOrchestrator:
             job.progress_pct = 100.0
             job.completed_at = datetime.now(timezone.utc)
             job.error = None
+            self._save_job_state(job_id)
 
         except Exception as e:
             logger.exception("Error during cleaning and verification: %s", e)
             job.status = JobStatus.FAILED
             job.current_stage = f"Cleaning failed: {e}"
             job.error = str(e)
+            self._save_job_state(job_id)
 
     def export_dataset(
         self,
@@ -298,7 +476,7 @@ class JobOrchestrator:
         user_id: Optional[str] = None,
     ) -> List[Path]:
         """Export cleaned dataset into any supported format (reusing pre-generated artifacts when available)."""
-        job = self.get_job(job_id, user_id=user_id) if user_id else self.jobs.get(job_id)
+        job = self.get_job(job_id, user_id=user_id)
         if not job:
             raise ValueError(f"Job {job_id} not found")
 
@@ -326,11 +504,12 @@ class JobOrchestrator:
         return export_cleaned(clean_pq, export_dir, format_id=format_id, options=options)
 
     def get_job_detail(self, job_id: str, user_id: Optional[str] = None) -> Optional[JobDetailResponse]:
-        job = self.get_job(job_id, user_id=user_id) if user_id else self.jobs.get(job_id)
+        job = self.get_job(job_id, user_id=user_id)
         if not job:
             return None
 
-        recipe_dict = self.job_recipes[job_id].model_dump() if job_id in self.job_recipes else None
+        recipe_obj = self.job_recipes.get(job_id)
+        recipe_dict = recipe_obj.model_dump() if hasattr(recipe_obj, "model_dump") else recipe_obj
         download_urls = {}
         export_opts = []
 
@@ -370,22 +549,25 @@ class JobOrchestrator:
 
     def evict_job(self, job_id: str, user_id: Optional[str] = None) -> bool:
         """Evict a job from in-memory state and remove its directory from storage."""
-        job = self.get_job(job_id, user_id=user_id) if user_id else self.jobs.get(job_id)
-        if not job and job_id not in self.jobs:
-            return False
-        user_to_clean = job.user_id if job else user_id
-        had_job = job_id in self.jobs
-        self.jobs.pop(job_id, None)
-        self.job_profiles.pop(job_id, None)
-        self.job_reports.pop(job_id, None)
-        self.job_recipes.pop(job_id, None)
-        self.job_plain_english.pop(job_id, None)
-        self.job_questions.pop(job_id, None)
-        self.job_verifications.pop(job_id, None)
-        self.job_adapter_options.pop(job_id, None)
-        self.job_conversion_reports.pop(job_id, None)
-        self.storage.cleanup_job(job_id, user_id=user_to_clean)
-        return had_job
+        with self._persist_lock:
+            job = self.jobs.get(job_id) or self.get_job(job_id, user_id=user_id)
+            if not job and job_id not in self.jobs:
+                return False
+            if user_id is not None and job and self._normalize_uid(job.user_id) != self._normalize_uid(user_id):
+                return False
+            user_to_clean = job.user_id if job else user_id
+            had_job = job_id in self.jobs
+            self.jobs.pop(job_id, None)
+            self.job_profiles.pop(job_id, None)
+            self.job_reports.pop(job_id, None)
+            self.job_recipes.pop(job_id, None)
+            self.job_plain_english.pop(job_id, None)
+            self.job_questions.pop(job_id, None)
+            self.job_verifications.pop(job_id, None)
+            self.job_adapter_options.pop(job_id, None)
+            self.job_conversion_reports.pop(job_id, None)
+            self.storage.cleanup_job(job_id, user_id=user_to_clean)
+            return had_job
 
     def get_expired_job_ids(self, max_age_hours: Optional[float] = None) -> List[str]:
         """Find non-active jobs whose created_at exceeds the specified TTL."""

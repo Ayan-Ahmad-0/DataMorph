@@ -17,6 +17,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from app.convert_store import get_convert_job, save_convert_job_meta
 from app.models import JobDetailResponse, JobMetadata
 from app.orchestrator import JobOrchestrator, get_orchestrator
 from app.storage import JobStorage
@@ -238,6 +239,7 @@ async def execute_convert_only(
             "work_dir": work_dir,
             "intermediate_parquet": result.intermediate_parquet,
         }
+        save_convert_job_meta(convert_jobs[convert_id])
 
         return {
             "convert_id": convert_id,
@@ -252,8 +254,8 @@ async def execute_convert_only(
 @app.get("/api/convert/download/{convert_id}")
 def download_converted_file(convert_id: str, user_id: str = Depends(get_current_tenant_id)):
     """Download converted output file(s). Zips if multiple parts were generated."""
-    job = convert_jobs.get(convert_id)
-    if not job or job.get("user_id", "default") != user_id:
+    job = get_convert_job(convert_jobs, convert_id, user_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Convert job not found or expired.")
 
     result: ConvertResult = job["result"]
@@ -285,8 +287,8 @@ def handoff_to_cleaning(
     user_id: str = Depends(get_current_tenant_id),
 ):
     """Handoff converted intermediate Parquet directly to the cleaning pipeline without re-converting."""
-    job = convert_jobs.get(convert_id)
-    if not job or job.get("user_id", "default") != user_id:
+    job = get_convert_job(convert_jobs, convert_id, user_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Convert job not found or expired.")
 
     intermediate_pq = job.get("intermediate_parquet")
@@ -353,7 +355,7 @@ async def upload_dataset_for_query_only(
             options=parsed_options,
         )
 
-        # Register in convert_jobs so handoff to clean works seamlessly if user later chooses to clean it
+        # Register in convert_jobs and persist meta.json so handoff to clean survives restarts
         convert_jobs[query_id] = {
             "id": query_id,
             "user_id": user_id,
@@ -361,6 +363,7 @@ async def upload_dataset_for_query_only(
             "work_dir": work_dir,
             "intermediate_parquet": target_parquet,
         }
+        save_convert_job_meta(convert_jobs[query_id])
 
         return {
             "query_id": query_id,
@@ -458,10 +461,9 @@ def update_recipe(
     user_id: str = Depends(get_current_tenant_id),
 ):
     """Update recipe choices or confirmation responses."""
-    job = orchestrator.get_job(job_id, user_id=user_id)
-    if not job:
+    updated = orchestrator.update_recipe(job_id, recipe, user_id=user_id)
+    if updated is None:
         raise HTTPException(status_code=404, detail="Job not found or expired.")
-    orchestrator.job_recipes[job_id] = recipe
     return {"status": "updated", "job_id": job_id}
 
 

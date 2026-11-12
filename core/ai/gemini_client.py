@@ -17,6 +17,12 @@ load_dotenv()
 _circuit_broken_until: float = 0.0
 _circuit_breaker_reason: str = ""
 
+# Module-level executor avoids per-call shutdown(wait=True) blocking on TimeoutError
+_SHARED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="gemini-recipe",
+)
+
 
 def get_gemini_callable(api_key: Optional[str] = None, model_name: str = "gemini-3.5-flash"):
     """
@@ -46,14 +52,15 @@ def get_gemini_callable(api_key: Optional[str] = None, model_name: str = "gemini
         def gemini_call(system_prompt: str, user_prompt: str) -> str:
             global _circuit_broken_until, _circuit_breaker_reason
 
-            candidate_models = [model_name, "gemini-flash-latest"]
-            last_err = None
+            candidate_models = list(dict.fromkeys([model_name, "gemini-flash-latest"]))
+            call_timeout = float(os.getenv("GEMINI_RECIPE_TIMEOUT_S", "5.0"))
+            last_err: Optional[BaseException] = None
 
             for m in candidate_models:
                 try:
-                    def do_call():
+                    def do_call(target_model: str = m):
                         return client.models.generate_content(
-                            model=m,
+                            model=target_model,
                             contents=user_prompt,
                             config={
                                 "system_instruction": system_prompt,
@@ -61,16 +68,18 @@ def get_gemini_callable(api_key: Optional[str] = None, model_name: str = "gemini
                             },
                         )
 
-                    # Hard 5.0 second deadline per call
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                        future = ex.submit(do_call)
-                        response = future.result(timeout=5.0)
-                        return response.text
+                    future = _SHARED_EXECUTOR.submit(do_call)
+                    response = future.result(timeout=call_timeout)
+                    return response.text
 
                 except concurrent.futures.TimeoutError:
-                    logger.warning("Gemini model %s timed out after 5.0s. Falling back to local engine.", m)
-                    last_err = TimeoutError(f"Gemini call to {m} timed out after 5.0s")
-                    break
+                    logger.warning(
+                        "Gemini model %s timed out after %.1fs. Trying next fallback.",
+                        m,
+                        call_timeout,
+                    )
+                    last_err = TimeoutError(f"Gemini call to {m} timed out after {call_timeout:.1f}s")
+                    continue
 
                 except Exception as e:
                     err_str = str(e).lower()

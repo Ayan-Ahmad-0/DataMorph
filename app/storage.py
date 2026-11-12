@@ -1,9 +1,47 @@
 """Local disk storage adapter for job data files and intermediate artifacts with multi-tenant partitioning."""
 
 from __future__ import annotations
+import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    """Atomically write JSON data via a sibling temp file and os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            json.dump(payload, tmp, ensure_ascii=False, indent=2, default=str)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def read_json_safe(path: Path) -> Optional[Any]:
+    """Read and parse a JSON file, returning None if missing or unreadable."""
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 class JobStorage:
@@ -66,6 +104,28 @@ class JobStorage:
         p = self.job_dir(job_id, user_id=user_id) / "reports"
         p.mkdir(parents=True, exist_ok=True)
         return p / "verification.json"
+
+    def state_json_path(self, job_id: str, user_id: Optional[str] = None) -> Path:
+        """Return the persistent job state snapshot path (does not create directories)."""
+        return self.job_dir(job_id, user_id=user_id) / "state.json"
+
+    def find_state_json_path(self, job_id: str, user_id: Optional[str] = None) -> Optional[Path]:
+        """Locate an existing state.json for a job, scoping to user_id when given."""
+        if user_id is not None:
+            candidate = self.state_json_path(job_id, user_id=user_id)
+            return candidate if candidate.exists() else None
+
+        # Internal lookup without explicit user_id: check direct default & tenant folders
+        direct_candidate = self.base_dir / job_id / "state.json"
+        if direct_candidate.exists():
+            return direct_candidate
+        if self.base_dir.exists():
+            for tenant_dir in self.base_dir.iterdir():
+                if tenant_dir.is_dir():
+                    candidate = tenant_dir / job_id / "state.json"
+                    if candidate.exists():
+                        return candidate
+        return None
 
     def cleanup_job(self, job_id: str, user_id: Optional[str] = None) -> None:
         """Remove a job workspace directory."""
