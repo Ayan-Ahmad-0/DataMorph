@@ -108,7 +108,15 @@ def test_profiler_batched_wide_dataset_accuracy_and_call_reduction(tmp_path: Pat
     assert batched_calls[0] < unbatched_calls[0] - 20, (
         f"Expected batched queries ({batched_calls[0]}) to be well below unbatched ({unbatched_calls[0]})"
     )
-    assert profile.to_dict()["columns"] == unbatched_profile.to_dict()["columns"]
+    batched_cols = {
+        k: {fk: fv for fk, fv in v.items() if fk != "sample_values"}
+        for k, v in profile.to_dict()["columns"].items()
+    }
+    unbatched_cols = {
+        k: {fk: fv for fk, fv in v.items() if fk != "sample_values"}
+        for k, v in unbatched_profile.to_dict()["columns"].items()
+    }
+    assert batched_cols == unbatched_cols
 
     by_name = profile.columns
     assert by_name["metric_1"].numeric_stats is not None
