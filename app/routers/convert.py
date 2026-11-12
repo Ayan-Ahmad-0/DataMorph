@@ -16,7 +16,14 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.convert_store import get_convert_job, save_convert_job_meta
-from app.dependencies import copy_stream_to_path, get_convert_jobs, get_orchestrator_dep, get_storage
+from app.dependencies import (
+    copy_stream_to_path,
+    get_convert_jobs,
+    get_max_upload_bytes,
+    get_orchestrator_dep,
+    get_storage,
+)
+from core.security import resolve_within_base, sanitize_filename, validate_safe_id
 from core.tenant import get_current_tenant_id
 
 if TYPE_CHECKING:

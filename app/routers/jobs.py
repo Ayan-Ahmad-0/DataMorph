@@ -164,6 +164,7 @@ async def upload_dataset(
 @router.get("/jobs/{job_id}/status", response_model=JobMetadata)
 def get_job_status_lightweight(job_id: str, user_id: str = Depends(get_current_tenant_id)):
     """Lightweight polling endpoint returning only JobMetadata without heavy profile/report payloads."""
+    validate_safe_id(job_id, label="job_id")
     orchestrator = get_orchestrator_dep()
     retention_manager = get_retention_manager()
     meta = orchestrator.get_job_status_snapshot(job_id, user_id=user_id)
@@ -289,5 +290,5 @@ def download_artifact(
         raise
     except Exception as e:
         logger.exception("Export failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Export error: {e}")
+        raise HTTPException(status_code=500, detail="Export failed due to an internal error.")
 
