@@ -59,25 +59,27 @@ class JobStorage:
         return JobStorage(base_dir=str(self.base_dir), user_id=user_id)
 
     def job_dir(self, job_id: str, user_id: Optional[str] = None) -> Path:
-        """Return the physical job directory, partitioning by user_id.
-        
-        Gracefully resolves legacy unpartitioned directories if uid is 'default'.
-        """
+        """Return the physical job directory, partitioning by user_id with traversal protection."""
+        safe_job_id = validate_safe_id(job_id, label="job_id")
         uid = user_id or self.user_id
         if uid.lower() in ("anonymous", "none"):
             uid = "default"
+        if uid != "default":
+            uid = validate_safe_id(uid, label="user_id")
 
         # Check if legacy unpartitioned directory exists for default tenant
-        if uid == "default" and (self.base_dir / job_id).exists() and not (self.base_dir / uid / job_id).exists():
-            return self.base_dir / job_id
+        legacy_dir = resolve_within_base(self.base_dir, safe_job_id)
+        tenant_dir = resolve_within_base(self.base_dir, uid, safe_job_id)
+        if uid == "default" and legacy_dir.exists() and not tenant_dir.exists():
+            return legacy_dir
 
-        tenant_dir = self.base_dir / uid / job_id
         return tenant_dir
 
     def raw_file_path(self, job_id: str, filename: str, user_id: Optional[str] = None) -> Path:
         p = self.job_dir(job_id, user_id=user_id) / "raw"
         p.mkdir(parents=True, exist_ok=True)
-        return p / filename
+        safe_name = sanitize_filename(filename, fallback="input.dat")
+        return resolve_within_base(p, safe_name)
 
     def raw_csv_path(self, job_id: str, filename: str = "input.csv", user_id: Optional[str] = None) -> Path:
         return self.raw_file_path(job_id, filename, user_id=user_id)
@@ -100,7 +102,8 @@ class JobStorage:
     def clean_export_path(self, job_id: str, filename: str, user_id: Optional[str] = None) -> Path:
         p = self.job_dir(job_id, user_id=user_id) / "exports"
         p.mkdir(parents=True, exist_ok=True)
-        return p / filename
+        safe_name = sanitize_filename(filename, fallback="export.dat")
+        return resolve_within_base(p, safe_name)
 
     def verification_json_path(self, job_id: str, user_id: Optional[str] = None) -> Path:
         p = self.job_dir(job_id, user_id=user_id) / "reports"
