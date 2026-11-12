@@ -175,4 +175,4 @@ export const TableEntityCard: React.FC<TableEntityCardProps> = React.memo(({
       </div>
     </div>
   );
-};
+});
