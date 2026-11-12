@@ -269,6 +269,7 @@ export function App() {
             clearInterval(intervalId);
             intervalId = null;
           }
+          isNavigatingFromPopstate.current = false;
           clearPersistedSession();
           setJobId(null);
           setJobData(null);
