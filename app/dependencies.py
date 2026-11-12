@@ -54,3 +54,4 @@ def copy_stream_to_path(src_file, dest_path: Path) -> int:
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(src_file, buffer, length=1024 * 1024)
     return dest_path.stat().st_size
+

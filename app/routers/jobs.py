@@ -277,3 +277,4 @@ def download_artifact(
     except Exception as e:
         logger.exception("Export failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Export error: {e}")
+

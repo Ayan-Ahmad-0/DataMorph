@@ -147,3 +147,4 @@ export async function triggerStorageCleanup(maxAgeHours?: number): Promise<any> 
   const res = await apiFetch(url, { method: 'POST' });
   return parseJsonOrThrow(res, 'Failed to trigger storage cleanup.');
 }
+

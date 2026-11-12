@@ -355,3 +355,4 @@ def ask_chart_from_text(
     except Exception as e:
         logger.exception("Failed to process chart text request for %s: %s", job_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to process chart request: {e}")
+

@@ -214,3 +214,4 @@ def get_wrangle_history(job_id: str, user_id: str = Depends(get_current_tenant_i
     except Exception as e:
         logger.exception("Failed to get wrangle history for %s: %s", job_id, e)
         raise HTTPException(status_code=500, detail=f"Failed to get wrangle history: {e}")
+

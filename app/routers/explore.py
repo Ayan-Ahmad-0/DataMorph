@@ -180,3 +180,4 @@ def ask_ai_analyst(
     except Exception as e:
         logger.exception("AI Analyst failed for job %s: %s", job_id, e)
         raise HTTPException(status_code=500, detail="Failed to process question with AI Analyst.")
+

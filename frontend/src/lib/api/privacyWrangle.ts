@@ -96,3 +96,4 @@ export async function getWrangleHistory(jobId: string): Promise<WrangleHistoryRe
   const res = await apiFetch(`${API_BASE}/api/jobs/${jobId}/wrangle/history`);
   return parseJsonOrThrow(res, 'Failed to fetch wrangle history.');
 }
+

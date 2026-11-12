@@ -117,3 +117,4 @@ export function getDownloadUrl(jobId: string, format: string): string {
   const uid = getTenantUserId();
   return `${API_BASE}/api/jobs/${jobId}/download/${format}?user_id=${encodeURIComponent(uid)}`;
 }
+

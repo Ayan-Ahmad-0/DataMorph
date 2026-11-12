@@ -40,3 +40,4 @@ def get_storage_inventory_and_status():
         "max_disk_usage_percent": retention_manager.config.max_disk_usage_percent,
     }
     return inventory
+
