@@ -134,14 +134,20 @@ class JobStorage:
 
     def cleanup_job(self, job_id: str, user_id: Optional[str] = None) -> None:
         """Remove a job workspace directory."""
+        safe_job_id = validate_safe_id(job_id, label="job_id")
         uid = user_id or self.user_id
-        target = self.base_dir / uid / job_id
+        if uid.lower() in ("anonymous", "none"):
+            uid = "default"
+        if uid != "default":
+            uid = validate_safe_id(uid, label="user_id")
+        target = resolve_within_base(self.base_dir, uid, safe_job_id)
+        legacy_target = resolve_within_base(self.base_dir, safe_job_id)
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
-        elif (self.base_dir / job_id).exists() and uid == "default":
-            shutil.rmtree(self.base_dir / job_id, ignore_errors=True)
+        elif legacy_target.exists() and uid == "default":
+            shutil.rmtree(legacy_target, ignore_errors=True)
 
         # Clean empty tenant parent directory if no other jobs remain
-        user_parent = self.base_dir / uid
+        user_parent = resolve_within_base(self.base_dir, uid)
         if user_parent.exists() and user_parent != self.base_dir and not any(user_parent.iterdir()):
             shutil.rmtree(user_parent, ignore_errors=True)

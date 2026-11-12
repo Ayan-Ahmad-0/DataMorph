@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 
 from core.modeling.detector import RelationshipDetector
+from core.security import resolve_within_base, validate_safe_id
 from core.modeling.models import (
     ColumnMetadata,
     JoinPreviewResult,

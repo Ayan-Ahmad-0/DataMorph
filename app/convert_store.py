@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from app.storage import read_json_safe, write_json_atomic
+from core.security import resolve_within_base, validate_safe_id
 from formats.convert import ConvertResult
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,16 @@ def save_convert_job_meta(job_data: Dict[str, Any]) -> None:
 
 
 def _find_meta_path(job_id: str, user_id: str, base_data_dir: Path) -> Optional[Path]:
+    safe_job_id = validate_safe_id(job_id, label="convert_id")
     uid = _normalize_uid(user_id)
+    if uid != "default":
+        uid = validate_safe_id(uid, label="user_id")
     for category in ("convert_jobs", "query_jobs"):
-        candidate = base_data_dir / category / uid / job_id / "meta.json"
+        candidate = resolve_within_base(base_data_dir, category, uid, safe_job_id, "meta.json")
         if candidate.exists():
             return candidate
         if uid == "default":
-            legacy_candidate = base_data_dir / category / job_id / "meta.json"
+            legacy_candidate = resolve_within_base(base_data_dir, category, safe_job_id, "meta.json")
             if legacy_candidate.exists():
                 return legacy_candidate
     return None
@@ -85,15 +89,16 @@ def get_convert_job(
     base_data_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """Fetch convert/query job from RAM or rehydrate from meta.json on disk."""
+    safe_convert_id = validate_safe_id(convert_id, label="convert_id")
     req_uid = _normalize_uid(user_id)
-    in_mem = convert_jobs.get(convert_id)
+    in_mem = convert_jobs.get(safe_convert_id)
     if in_mem is not None:
         if _normalize_uid(str(in_mem.get("user_id", "default"))) != req_uid:
             return None
         return in_mem
 
     data_root = (base_data_dir or Path("data")).resolve()
-    meta_path = _find_meta_path(convert_id, req_uid, data_root)
+    meta_path = _find_meta_path(safe_convert_id, req_uid, data_root)
     if not meta_path:
         return None
 
