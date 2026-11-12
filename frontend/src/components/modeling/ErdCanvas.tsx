@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -45,6 +45,16 @@ export const ErdCanvas: React.FC<ErdCanvasProps> = ({
 
   // Selected table
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+
+  // Keep refs to volatile state so memoized card callbacks remain stable during pan/zoom/drag
+  const tablesRef = useRef(tables);
+  tablesRef.current = tables;
+  const connectingSourceRef = useRef(connectingSource);
+  connectingSourceRef.current = connectingSource;
+  const onDeleteTableRef = useRef(onDeleteTable);
+  onDeleteTableRef.current = onDeleteTable;
+  const onConnectColumnsRef = useRef(onConnectColumns);
+  onConnectColumnsRef.current = onConnectColumns;
 
   // Non-passive native wheel listener to prevent whole-page browser zoom on Ctrl+Wheel or trackpad pinch
   useEffect(() => {
@@ -114,46 +124,110 @@ export const ErdCanvas: React.FC<ErdCanvasProps> = ({
     setDraggingTable(null);
   };
 
-  const startDraggingTable = (tableName: string, e: React.MouseEvent) => {
+  const startDraggingTable = useCallback((tableName: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const tbl = tablesRef.current[tableName];
     setDraggingTable(tableName);
     setDragStartPos({ x: e.clientX, y: e.clientY });
     setInitialTablePos({
-      x: tables[tableName]?.position_x || 0,
-      y: tables[tableName]?.position_y || 0,
+      x: tbl?.position_x || 0,
+      y: tbl?.position_y || 0,
     });
-  };
+  }, []);
 
   // Column connection logic
-  const handleStartConnect = (tableName: string, colName: string) => {
-    if (!connectingSource) {
-      setConnectingSource({ table: tableName, col: colName });
-    }
-  };
+  const handleStartConnect = useCallback((tableName: string, colName: string) => {
+    setConnectingSource((prev) => prev ?? { table: tableName, col: colName });
+  }, []);
 
-  const handleEndConnect = (tableName: string, colName: string) => {
-    if (connectingSource && connectingSource.table !== tableName) {
-      onConnectColumns(connectingSource.table, connectingSource.col, tableName, colName);
+  const handleEndConnect = useCallback((tableName: string, colName: string) => {
+    const source = connectingSourceRef.current;
+    if (source && source.table !== tableName) {
+      onConnectColumnsRef.current(source.table, source.col, tableName, colName);
     }
     setConnectingSource(null);
-  };
+  }, []);
 
-  // Helper to compute anchor point for a table column
-  const getColumnAnchor = (tableName: string, colName: string, isSource: boolean) => {
-    const tbl = tables[tableName];
-    if (!tbl) return { x: 0, y: 0 };
+  // Precompute Bezier edge geometry only when tables or relationships change (not on pan/zoom/hover)
+  const relationshipEdges = useMemo(() => {
+    const columnIndicesByTable: Record<string, Map<string, number>> = {};
+    for (const [tblName, tbl] of Object.entries(tables)) {
+      const idxMap = new Map<string, number>();
+      tbl.columns.forEach((c, idx) => idxMap.set(c.name, idx));
+      columnIndicesByTable[tblName] = idxMap;
+    }
 
-    const colIndex = tbl.columns.findIndex((c) => c.name === colName);
-    const headerHeight = 44;
-    const searchHeight = tbl.columns.length > 6 ? 36 : 0;
-    const rowHeight = 28;
-    const yOffset = headerHeight + searchHeight + (colIndex >= 0 ? colIndex * rowHeight + 14 : 20);
+    const getAnchor = (tableName: string, colName: string, isSource: boolean) => {
+      const tbl = tables[tableName];
+      if (!tbl) return { x: 0, y: 0 };
+      const colIndex = columnIndicesByTable[tableName]?.get(colName) ?? -1;
+      const headerHeight = 44;
+      const searchHeight = tbl.columns.length > 6 ? 36 : 0;
+      const rowHeight = 28;
+      const yOffset = headerHeight + searchHeight + (colIndex >= 0 ? colIndex * rowHeight + 14 : 20);
+      const cardWidth = 288; // w-72 = 18rem = 288px
+      return {
+        x: isSource ? tbl.position_x + cardWidth : tbl.position_x,
+        y: tbl.position_y + yOffset,
+      };
+    };
 
-    const cardWidth = 288; // w-72 = 18rem = 288px
-    const x = isSource ? tbl.position_x + cardWidth : tbl.position_x;
-    const y = tbl.position_y + yOffset;
-    return { x, y };
-  };
+    return relationships.flatMap((rel) => {
+      const fromTable = tables[rel.from_table];
+      const toTable = tables[rel.to_table];
+      if (!fromTable || !toTable) return [];
+
+      const isFromOnLeft = fromTable.position_x < toTable.position_x;
+      const startAnchor = getAnchor(rel.from_table, rel.from_column, isFromOnLeft);
+      const endAnchor = getAnchor(rel.to_table, rel.to_column, !isFromOnLeft);
+
+      const x1 = startAnchor.x;
+      const y1 = startAnchor.y;
+      const x2 = endAnchor.x;
+      const y2 = endAnchor.y;
+
+      const dx = Math.abs(x2 - x1);
+      const controlDist = Math.max(40, dx * 0.45);
+      const cx1 = isFromOnLeft ? x1 + controlDist : x1 - controlDist;
+      const cx2 = isFromOnLeft ? x2 - controlDist : x2 + controlDist;
+
+      return [{
+        rel,
+        pathD: `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`,
+        midX: (x1 + x2) / 2,
+        midY: (y1 + y2) / 2,
+      }];
+    });
+  }, [relationships, tables]);
+
+  const tableNamesKey = Object.keys(tables).join('\0');
+  const tableList = useMemo(() => Object.values(tables), [tables]);
+  const perTableHandlers = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        onSelect: () => void;
+        onDelete: () => void;
+        onStartConnect: (col: string) => void;
+        onEndConnect: (col: string) => void;
+        onMouseDownDrag: (e: React.MouseEvent) => void;
+      }
+    > = {};
+    for (const tableName of tableNamesKey ? tableNamesKey.split('\0') : []) {
+      map[tableName] = {
+        onSelect: () => setSelectedTable(tableName),
+        onDelete: () => onDeleteTableRef.current(tableName),
+        onStartConnect: (col) => handleStartConnect(tableName, col),
+        onEndConnect: (col) => handleEndConnect(tableName, col),
+        onMouseDownDrag: (e) => startDraggingTable(tableName, e),
+      };
+    }
+    return map;
+  }, [tableNamesKey, startDraggingTable, handleStartConnect, handleEndConnect]);
+
+  const connectingFromCol = connectingSource
+    ? `${connectingSource.table}.${connectingSource.col}`
+    : null;
 
   const resetView = () => {
     setZoom(1);
