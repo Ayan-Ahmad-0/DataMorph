@@ -277,18 +277,19 @@ class S3Connector(BaseConnector):
 
             # Execute vectorized COPY TO S3 based on format
             fmt = cfg.export_format
-            src_path_str = str(source_parquet_path.resolve()).replace("\\", "/")
+            src_path_str = escape_sql_literal(str(source_parquet_path.resolve()).replace("\\", "/"))
+            safe_dest_uri = escape_sql_literal(destination_uri)
 
             if fmt == ExportFormat.PARQUET:
-                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{destination_uri}' (FORMAT PARQUET, COMPRESSION 'ZSTD');")
+                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{safe_dest_uri}' (FORMAT PARQUET, COMPRESSION 'ZSTD');")
             elif fmt == ExportFormat.CSV:
-                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{destination_uri}' (FORMAT CSV, HEADER TRUE);")
+                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{safe_dest_uri}' (FORMAT CSV, HEADER TRUE);")
             elif fmt == ExportFormat.TSV:
-                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{destination_uri}' (FORMAT CSV, DELIMITER '\t', HEADER TRUE);")
+                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{safe_dest_uri}' (FORMAT CSV, DELIMITER '\t', HEADER TRUE);")
             elif fmt == ExportFormat.JSON:
-                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{destination_uri}' (FORMAT JSON, ARRAY TRUE);")
+                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{safe_dest_uri}' (FORMAT JSON, ARRAY TRUE);")
             elif fmt == ExportFormat.NDJSON:
-                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{destination_uri}' (FORMAT JSON);")
+                con.execute(f"COPY (SELECT * FROM read_parquet('{src_path_str}')) TO '{safe_dest_uri}' (FORMAT JSON);")
             else:
                 raise ValueError(f"Unsupported export format: {fmt}")
 
@@ -356,19 +357,21 @@ class S3Connector(BaseConnector):
 
         try:
             fmt = ((options or {}).get("format") or "").lower()
+            safe_source_uri = escape_sql_literal(source_uri)
+            safe_target_str = escape_sql_literal(target_path_str)
             uri_lower = source_uri.lower()
             if fmt == "parquet" or uri_lower.endswith(".parquet"):
-                scan_expr = f"read_parquet('{source_uri}')"
+                scan_expr = f"read_parquet('{safe_source_uri}')"
             elif fmt in ("csv", "tsv") or uri_lower.endswith((".csv", ".tsv")):
-                scan_expr = f"read_csv_auto('{source_uri}')"
+                scan_expr = f"read_csv_auto('{safe_source_uri}')"
             elif fmt in ("json", "ndjson", "jsonl") or uri_lower.endswith((".json", ".ndjson", ".jsonl")):
-                scan_expr = f"read_json_auto('{source_uri}')"
+                scan_expr = f"read_json_auto('{safe_source_uri}')"
             else:
-                scan_expr = f"read_parquet('{source_uri}')"
+                scan_expr = f"read_parquet('{safe_source_uri}')"
 
-            con.execute(f"COPY (SELECT * FROM {scan_expr}) TO '{target_path_str}' (FORMAT PARQUET, COMPRESSION 'ZSTD');")
+            con.execute(f"COPY (SELECT * FROM {scan_expr}) TO '{safe_target_str}' (FORMAT PARQUET, COMPRESSION 'ZSTD');")
 
-            row_count_res = con.execute(f"SELECT count(*) FROM read_parquet('{target_path_str}')").fetchone()
+            row_count_res = con.execute(f"SELECT count(*) FROM read_parquet('{safe_target_str}')").fetchone()
             row_count = int(row_count_res[0]) if row_count_res else 0
 
             elapsed = time.perf_counter() - start_time
