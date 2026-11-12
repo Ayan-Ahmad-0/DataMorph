@@ -1,22 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { UploadPage } from './pages/UploadPage';
-import { ReportPage } from './pages/ReportPage';
-import { ApprovalPage } from './pages/ApprovalPage';
-import { ProgressPage } from './pages/ProgressPage';
-import { ResultsPage } from './pages/ResultsPage';
-import { ConvertPage } from './pages/ConvertPage';
-import { QueryPage } from './pages/QueryPage';
-import { VisualizePage } from './pages/VisualizePage';
-import { ModelPage } from './pages/ModelPage';
 import {
   ApiError,
   approveAndClean,
   getJobDetail,
+  getJobStatus,
   type JobDetailResponse,
   type QueryUploadResult,
   type QueryHandoffResult,
 } from './lib/api';
+
+const ReportPage = lazy(() => import('./pages/ReportPage').then((m) => ({ default: m.ReportPage })));
+const ApprovalPage = lazy(() => import('./pages/ApprovalPage').then((m) => ({ default: m.ApprovalPage })));
+const ProgressPage = lazy(() => import('./pages/ProgressPage').then((m) => ({ default: m.ProgressPage })));
+const ResultsPage = lazy(() => import('./pages/ResultsPage').then((m) => ({ default: m.ResultsPage })));
+const ConvertPage = lazy(() => import('./pages/ConvertPage').then((m) => ({ default: m.ConvertPage })));
+const QueryPage = lazy(() => import('./pages/QueryPage').then((m) => ({ default: m.QueryPage })));
+const VisualizePage = lazy(() => import('./pages/VisualizePage').then((m) => ({ default: m.VisualizePage })));
+const ModelPage = lazy(() => import('./pages/ModelPage').then((m) => ({ default: m.ModelPage })));
 import { formatBytes, formatNumber } from './lib/format';
 import {
   buildHashState,
@@ -216,85 +218,132 @@ export function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Hydrate & poll job detail from FastAPI backend
+  // Hydrate & adaptively poll job status/detail from FastAPI backend
   useEffect(() => {
     if (!jobId) return;
 
     let cancelled = false;
-    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let lastKnownStatus: string | undefined =
+      jobData?.job?.id === jobId ? jobData.job.status : undefined;
+    let awaitingChecks = 0;
 
     const terminalStatuses = new Set(['DONE', 'DONE_WITH_WARNINGS', 'FAILED', 'CANCELLED']);
+    const maxAwaitingChecks = 6;
 
-    const fetchAndSync = async () => {
-      try {
-        const detail = await getJobDetail(jobId);
-        if (cancelled) return;
-
-        setJobData(detail);
-        setSessionNotice(null);
-
-        setFileMeta((prev) => ({
-          name: detail.job.filename || prev.name,
-          sizeFormatted:
-            detail.job.file_size_bytes > 0
-              ? formatBytes(detail.job.file_size_bytes)
-              : prev.sizeFormatted,
-          rowCountFormatted: detail.profile?.file?.rows
-            ? formatNumber(detail.profile.file.rows)
-            : detail.job.row_count > 0
-              ? formatNumber(detail.job.row_count)
-              : prev.rowCountFormatted,
-        }));
-
-        const status = detail.job.status;
-        if (status === 'AWAITING_APPROVAL' && currentStep === 1) {
-          setCurrentStep(2);
-        } else if ((status === 'DONE' || status === 'DONE_WITH_WARNINGS') && currentStep === 4) {
-          setCurrentStep(5);
-        } else if (status === 'AWAITING_APPROVAL' && (currentStep === 4 || currentStep === 5)) {
-          // If server restart recovered an interrupted cleaning run back to AWAITING_APPROVAL, return to Approval
-          setCurrentStep(3);
-        } else if (status === 'FAILED' && currentStep > 1 && currentStep !== 4) {
-          setCurrentStep(4);
-        }
-
-        if (terminalStatuses.has(status) && intervalId) {
-          clearInterval(intervalId);
-          intervalId = null;
-        }
-      } catch (err) {
-        if (cancelled) return;
-        if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
-          if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-          }
-          isNavigatingFromPopstate.current = false;
-          clearPersistedSession();
-          setJobId(null);
-          setJobData(null);
-          setFileMeta({ name: '', sizeFormatted: '', rowCountFormatted: '' });
-          setCurrentStep(1);
-          setSessionNotice(
-            'Your previous cleaning session expired or is no longer available. Upload a file to start a new job.'
-          );
-          return;
-        }
-        console.error('Error polling job status:', err);
+    const applyJobStatusRouting = (status: string) => {
+      if (status === 'AWAITING_APPROVAL' && currentStep === 1) {
+        setCurrentStep(2);
+      } else if ((status === 'DONE' || status === 'DONE_WITH_WARNINGS') && currentStep === 4) {
+        setCurrentStep(5);
+      } else if (status === 'AWAITING_APPROVAL' && (currentStep === 4 || currentStep === 5)) {
+        // If server restart recovered an interrupted cleaning run back to AWAITING_APPROVAL, return to Approval
+        setCurrentStep(3);
+      } else if (status === 'FAILED' && currentStep > 1 && currentStep !== 4) {
+        setCurrentStep(4);
       }
     };
 
-    // Fetch immediately on mount/jobId change instead of waiting 600ms
-    fetchAndSync();
+    const handlePollError = (err: unknown) => {
+      if (cancelled) return;
+      if (err instanceof ApiError && (err.status === 404 || err.status === 410)) {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        isNavigatingFromPopstate.current = false;
+        clearPersistedSession();
+        setJobId(null);
+        setJobData(null);
+        setFileMeta({ name: '', sizeFormatted: '', rowCountFormatted: '' });
+        setCurrentStep(1);
+        setSessionNotice(
+          'Your previous cleaning session expired or is no longer available. Upload a file to start a new job.'
+        );
+        return;
+      }
+      console.error('Error polling job status:', err);
+    };
 
-    const currentStatus = jobData?.job?.id === jobId ? jobData.job.status : undefined;
-    if (!currentStatus || !terminalStatuses.has(currentStatus)) {
-      intervalId = setInterval(fetchAndSync, 600);
-    }
+    const scheduleNext = (status: string | undefined) => {
+      if (cancelled) return;
+      if (status && terminalStatuses.has(status)) return;
+      if (status === 'AWAITING_APPROVAL') {
+        if (awaitingChecks >= maxAwaitingChecks) return;
+        awaitingChecks += 1;
+        timeoutId = setTimeout(pollTick, 2500);
+        return;
+      }
+      timeoutId = setTimeout(pollTick, 750);
+    };
+
+    const fetchFullDetail = async (): Promise<string | undefined> => {
+      const detail = await getJobDetail(jobId);
+      if (cancelled) return undefined;
+
+      setJobData(detail);
+      setSessionNotice(null);
+
+      setFileMeta((prev) => ({
+        name: detail.job.filename || prev.name,
+        sizeFormatted:
+          detail.job.file_size_bytes > 0
+            ? formatBytes(detail.job.file_size_bytes)
+            : prev.sizeFormatted,
+        rowCountFormatted: detail.profile?.file?.rows
+          ? formatNumber(detail.profile.file.rows)
+          : detail.job.row_count > 0
+            ? formatNumber(detail.job.row_count)
+            : prev.rowCountFormatted,
+      }));
+
+      lastKnownStatus = detail.job.status;
+      applyJobStatusRouting(detail.job.status);
+      return detail.job.status;
+    };
+
+    const pollTick = async () => {
+      try {
+        // Use lightweight /status during active pipeline ticks, then fetch full /jobs/{id} on transition
+        if (lastKnownStatus && typeof getJobStatus === 'function' && lastKnownStatus !== 'AWAITING_APPROVAL') {
+          const snap = await getJobStatus(jobId);
+          if (cancelled) return;
+
+          setJobData((prev) => (prev ? { ...prev, job: snap } : prev));
+          setSessionNotice(null);
+
+          const transitioned =
+            snap.status !== lastKnownStatus ||
+            terminalStatuses.has(snap.status) ||
+            snap.status === 'AWAITING_APPROVAL';
+          lastKnownStatus = snap.status;
+
+          if (transitioned) {
+            const fullStatus = await fetchFullDetail();
+            scheduleNext(fullStatus);
+            return;
+          }
+
+          applyJobStatusRouting(snap.status);
+          scheduleNext(snap.status);
+          return;
+        }
+
+        const status = await fetchFullDetail();
+        scheduleNext(status);
+      } catch (err) {
+        handlePollError(err);
+      }
+    };
+
+    // Hydrate immediately on mount/jobId change instead of waiting for the first timer tick
+    fetchFullDetail()
+      .then((status) => scheduleNext(status))
+      .catch(handlePollError);
 
     return () => {
       cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [jobId, currentStep]);
 
@@ -461,6 +510,13 @@ export function App() {
           </div>
         )}
 
+        <Suspense
+          fallback={
+            <div className="flex-1 flex items-center justify-center p-8 text-xs text-[var(--text-muted)]">
+              Loading workspace...
+            </div>
+          }
+        >
         {appMode === 'model' ? (
           <ModelPage onHandoffToQuery={handleHandoffToQuery} />
         ) : appMode === 'convert' ? (
@@ -537,6 +593,7 @@ export function App() {
             )}
           </>
         )}
+        </Suspense>
       </main>
     </div>
   );
