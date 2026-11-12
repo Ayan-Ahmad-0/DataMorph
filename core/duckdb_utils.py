@@ -61,6 +61,36 @@ def get_duckdb_threads() -> int:
     return min(4, max(1, cpu))
 
 
+def get_max_concurrent_pipelines() -> int:
+    """Return max concurrent heavy profiling/cleaning pipelines safe for host RAM."""
+    custom = os.getenv("MAX_CONCURRENT_PIPELINES")
+    if custom and custom.strip():
+        try:
+            return max(1, int(custom.strip()))
+        except ValueError:
+            pass
+
+    ram_mb = get_system_ram_mb()
+    if ram_mb is not None:
+        if ram_mb <= 2048:
+            return 1
+        if ram_mb <= 4096:
+            return 2
+        return min(4, max(2, os.cpu_count() or 2))
+    return 2
+
+
+def get_chart_concurrency_limits() -> tuple[int, int]:
+    """Return (max_global_chart_queries, max_per_user_chart_queries) scaled to host RAM."""
+    ram_mb = get_system_ram_mb()
+    if ram_mb is not None:
+        if ram_mb <= 2048:
+            return (4, 3)
+        if ram_mb <= 4096:
+            return (8, 5)
+    return (12, 8)
+
+
 def get_duckdb_temp_directory() -> str:
     """
     Return a safe, cross-platform temporary directory for DuckDB spilling.
