@@ -1,9 +1,10 @@
 name: Deploy to Oracle Cloud
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +13,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Deploy application via SSH
@@ -23,8 +25,19 @@ jobs:
           script: |
             set -e
             cd ~/data-cleaner
-            git pull origin main
-            docker compose down
-            docker compose up --build -d
+            git pull --ff-only origin main
+            docker compose up --build -d --remove-orphans
+            for i in $(seq 1 15); do
+              if curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1; then
+                echo "Healthcheck passed!"
+                break
+              fi
+              if [ "$i" -eq 15 ]; then
+                echo "Healthcheck failed after rebuild!" >&2
+                docker compose logs --tail=50 data-cleaner >&2 || true
+                exit 1
+              fi
+              sleep 2
+            done
+            docker image prune -f
             echo "Deployment completed successfully!"
-
