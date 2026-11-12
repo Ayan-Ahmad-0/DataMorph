@@ -39,7 +39,7 @@ from tests.analyst.eval_questions import EVAL_QUESTIONS, run_evaluation_suite
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("AnalystAudit")
 
-AUDIT_DIR = Path("scratch/audit_results")
+AUDIT_DIR = Path("data/audit_results")
 AUDIT_DIR.mkdir(parents=True, exist_ok=True)
 
 
