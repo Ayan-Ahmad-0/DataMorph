@@ -15,7 +15,10 @@ load_dotenv()
 import duckdb
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.background import BackgroundTask as StarletteBackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from app.convert_store import get_convert_job, save_convert_job_meta
 from app.models import JobDetailResponse, JobMetadata
@@ -70,13 +73,28 @@ app = FastAPI(
 app.include_router(connectors_router)
 
 @app.middleware("http")
-async def add_no_cache_for_html(request: Request, call_next):
+async def add_cache_headers(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path in ("/", "/index.html") or request.url.path.endswith(".html"):
+    path = request.url.path
+    if path in ("/", "/index.html") or path.endswith(".html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif path.startswith("/assets/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
+
+
+def _copy_stream_to_path(src_file, dest_path: Path) -> int:
+    """Copy uploaded file stream to disk using 1 MB chunks and return byte count."""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(src_file, buffer, length=1024 * 1024)
+    return dest_path.stat().st_size
+
+
+# Compress JSON/text/JS/CSS responses automatically while leaving small payloads untouched
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Enable CORS for frontend development
 app.add_middleware(

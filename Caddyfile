@@ -1,4 +1,5 @@
 datamorph.duckdns.org {
+    encode zstd gzip
     request_body {
         max_size 12GB
     }
