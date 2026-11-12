@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import duckdb
 from pydantic import BaseModel, Field
 
+from core.security import escape_sql_literal, validate_external_host
 from connectors.base import (
     BaseConnector,
     ConnectionTestResult,
@@ -78,29 +79,33 @@ class S3Connector(BaseConnector):
         )
 
     def _configure_connection(self, con: duckdb.DuckDBPyConnection, cfg: S3ConnectorConfig) -> None:
-        """Load httpfs and configure DuckDB S3 session parameters."""
+        """Load httpfs and configure DuckDB S3 session parameters safely."""
         con.execute("INSTALL httpfs; LOAD httpfs;")
 
-        # Fallback to environment variables if not explicitly provided
-        key_id = (cfg.access_key_id or os.getenv("AWS_ACCESS_KEY_ID") or "").strip()
-        secret_key = (cfg.secret_access_key or os.getenv("AWS_SECRET_ACCESS_KEY") or "").strip()
-        token = (cfg.session_token or os.getenv("AWS_SESSION_TOKEN") or "").strip()
-        
+        allow_env_creds = os.getenv("ALLOW_SERVER_CONNECTOR_ENV_CREDS", "false").strip().lower() in ("1", "true", "yes")
+        key_id = (cfg.access_key_id or (os.getenv("AWS_ACCESS_KEY_ID") if allow_env_creds else "") or "").strip()
+        secret_key = (cfg.secret_access_key or (os.getenv("AWS_SECRET_ACCESS_KEY") if allow_env_creds else "") or "").strip()
+        token = (cfg.session_token or (os.getenv("AWS_SESSION_TOKEN") if allow_env_creds else "") or "").strip()
+
         # Clean region: strip any parentheses or human labels (e.g. "us-east-1 (N. Virginia)" -> "us-east-1")
-        raw_region = cfg.region or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        raw_region = cfg.region or (os.getenv("AWS_DEFAULT_REGION") if allow_env_creds else "") or "us-east-1"
         region = raw_region.split("(")[0].strip() if raw_region else "us-east-1"
 
         if key_id:
-            con.execute(f"SET s3_access_key_id = '{key_id}';")
+            con.execute(f"SET s3_access_key_id = '{escape_sql_literal(key_id)}';")
         if secret_key:
-            con.execute(f"SET s3_secret_access_key = '{secret_key}';")
+            con.execute(f"SET s3_secret_access_key = '{escape_sql_literal(secret_key)}';")
         if token:
-            con.execute(f"SET s3_session_token = '{token}';")
+            con.execute(f"SET s3_session_token = '{escape_sql_literal(token)}';")
         if region:
-            con.execute(f"SET s3_region = '{region}';")
+            con.execute(f"SET s3_region = '{escape_sql_literal(region)}';")
 
-        # Parse endpoint and SSL flags
-        raw_endpoint = (cfg.endpoint_url or os.getenv("AWS_ENDPOINT_URL_S3") or os.getenv("AWS_ENDPOINT_URL") or "").strip()
+        # Parse endpoint and validate against SSRF / cloud metadata access
+        raw_endpoint = (
+            cfg.endpoint_url
+            or ((os.getenv("AWS_ENDPOINT_URL_S3") or os.getenv("AWS_ENDPOINT_URL")) if allow_env_creds else "")
+            or ""
+        ).strip()
         is_custom_non_aws = False
         use_ssl = cfg.use_ssl
 
@@ -118,11 +123,13 @@ class S3Connector(BaseConnector):
 
             # Strip any trailing slashes or subpaths
             endpoint = endpoint.split("/")[0].strip()
+            if endpoint:
+                validate_external_host(endpoint)
 
             # Only configure custom endpoint for non-AWS S3 (MinIO, Cloudflare R2, LocalStack).
             # If the user typed standard AWS endpoints (e.g. s3.amazonaws.com), let DuckDB use native regional resolution.
             if endpoint and not endpoint.endswith("amazonaws.com"):
-                con.execute(f"SET s3_endpoint = '{endpoint}';")
+                con.execute(f"SET s3_endpoint = '{escape_sql_literal(endpoint)}';")
                 con.execute(f"SET s3_use_ssl = {'true' if use_ssl else 'false'};")
                 is_custom_non_aws = True
 
@@ -133,7 +140,7 @@ class S3Connector(BaseConnector):
         else:
             url_style = "path" if is_custom_non_aws else "vhost"
 
-        con.execute(f"SET s3_url_style = '{url_style}';")
+        con.execute(f"SET s3_url_style = '{escape_sql_literal(url_style)}';")
 
     def _build_destination_uri(self, cfg: S3ConnectorConfig, default_name: str) -> str:
         """Construct a normalized, safe s3:// URI."""
@@ -189,21 +196,22 @@ class S3Connector(BaseConnector):
             # If an object key or source URI is provided for import, attempt a lightweight metadata scan (LIMIT 0)
             if not is_export_mode and (cfg.key or cfg.source_uri):
                 source_uri = self._resolve_source_uri(cfg)
+                safe_uri = escape_sql_literal(source_uri)
                 fmt = Path(source_uri).suffix.lower().lstrip(".")
                 if fmt == "parquet":
-                    scan_expr = f"read_parquet('{source_uri}')"
+                    scan_expr = f"read_parquet('{safe_uri}')"
                 elif fmt in ("csv", "tsv"):
-                    scan_expr = f"read_csv_auto('{source_uri}')"
+                    scan_expr = f"read_csv_auto('{safe_uri}')"
                 elif fmt in ("json", "ndjson", "jsonl"):
-                    scan_expr = f"read_json_auto('{source_uri}')"
+                    scan_expr = f"read_json_auto('{safe_uri}')"
                 else:
-                    scan_expr = f"read_csv_auto('{source_uri}')"
+                    scan_expr = f"read_csv_auto('{safe_uri}')"
 
                 con.execute(f"SELECT * FROM {scan_expr} LIMIT 0")
             elif is_export_mode:
                 # In export mode, verify bucket connectivity without requiring target key to exist
                 try:
-                    con.execute(f"SELECT count(*) FROM glob('s3://{clean_bucket}/*') LIMIT 1")
+                    con.execute(f"SELECT count(*) FROM glob('s3://{escape_sql_literal(clean_bucket)}/*') LIMIT 1")
                 except Exception as probe_err:
                     err_str = str(probe_err).lower()
                     if "403" in err_str or "accessdenied" in err_str or "forbidden" in err_str:
