@@ -330,96 +330,72 @@ export const ErdCanvas: React.FC<ErdCanvasProps> = ({
             </marker>
           </defs>
 
-          {relationships.map((rel) => {
-            const fromTable = tables[rel.from_table];
-            const toTable = tables[rel.to_table];
-            if (!fromTable || !toTable) return null;
+          {relationshipEdges.map(({ rel, pathD, midX, midY }) => (
+            <g key={rel.id} className="cursor-pointer pointer-events-auto group" onClick={() => onSelectRelationship(rel)}>
+              {/* Thick invisible hover target */}
+              <path d={pathD} fill="none" stroke="transparent" strokeWidth="18" />
 
-            // Determine left/right orientation
-            const isFromOnLeft = fromTable.position_x < toTable.position_x;
-            const startAnchor = getColumnAnchor(rel.from_table, rel.from_column, isFromOnLeft);
-            const endAnchor = getColumnAnchor(rel.to_table, rel.to_column, !isFromOnLeft);
+              {/* Visible curve */}
+              <path
+                d={pathD}
+                fill="none"
+                stroke={rel.status === 'confirmed' ? '#10B981' : '#3B82F6'}
+                strokeWidth="2"
+                strokeDasharray={rel.confidence < 0.85 ? '4 4' : undefined}
+                className="group-hover:stroke-[#FF4B3E] transition-colors"
+              />
 
-            const x1 = startAnchor.x;
-            const y1 = startAnchor.y;
-            const x2 = endAnchor.x;
-            const y2 = endAnchor.y;
+              {/* Small visual stem connecting pill to line */}
+              <line
+                x1={midX}
+                y1={midY - 8}
+                x2={midX}
+                y2={midY}
+                stroke={rel.status === 'confirmed' ? '#10B981' : '#3B82F6'}
+                strokeWidth="1.5"
+                className="group-hover:stroke-[#FF4B3E] transition-colors"
+              />
 
-            const dx = Math.abs(x2 - x1);
-            const controlDist = Math.max(40, dx * 0.45);
-            const cx1 = isFromOnLeft ? x1 + controlDist : x1 - controlDist;
-            const cx2 = isFromOnLeft ? x2 - controlDist : x2 + controlDist;
-
-            const pathD = `M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`;
-            const midX = (x1 + x2) / 2;
-            const midY = (y1 + y2) / 2;
-
-            return (
-              <g key={rel.id} className="cursor-pointer pointer-events-auto group" onClick={() => onSelectRelationship(rel)}>
-                {/* Thick invisible hover target */}
-                <path d={pathD} fill="none" stroke="transparent" strokeWidth="18" />
-
-                {/* Visible curve */}
-                <path
-                  d={pathD}
-                  fill="none"
-                  stroke={rel.status === 'confirmed' ? '#10B981' : '#3B82F6'}
-                  strokeWidth="2"
-                  strokeDasharray={rel.confidence < 0.85 ? '4 4' : undefined}
-                  className="group-hover:stroke-[#FF4B3E] transition-colors"
-                />
-
-                {/* Small visual stem connecting pill to line */}
-                <line
-                  x1={midX}
-                  y1={midY - 8}
-                  x2={midX}
-                  y2={midY}
-                  stroke={rel.status === 'confirmed' ? '#10B981' : '#3B82F6'}
-                  strokeWidth="1.5"
-                  className="group-hover:stroke-[#FF4B3E] transition-colors"
-                />
-
-                {/* Elevated Cardinality pill floating cleanly above curve */}
-                <foreignObject
-                  x={midX - 48}
-                  y={midY - 26}
-                  width="96"
-                  height="26"
-                  className="overflow-visible pointer-events-auto"
+              {/* Elevated Cardinality pill floating cleanly above curve */}
+              <foreignObject
+                x={midX - 48}
+                y={midY - 26}
+                width="96"
+                height="26"
+                className="overflow-visible pointer-events-auto"
+              >
+                <div
+                  className="flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-[var(--bg-surface)] border border-[var(--border-hairline)] shadow-md group-hover:border-[#FF4B3E] group-hover:text-[#FF4B3E] transition-all cursor-pointer select-none"
+                  title={`Click to preview join: ${rel.from_table}.${rel.from_column} → ${rel.to_table}.${rel.to_column} (${Math.round(rel.match_ratio * 100)}% match)`}
                 >
-                  <div
-                    className="flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono font-bold bg-[var(--bg-surface)] border border-[var(--border-hairline)] shadow-md group-hover:border-[#FF4B3E] group-hover:text-[#FF4B3E] transition-all cursor-pointer select-none"
-                    title={`Click to preview join: ${rel.from_table}.${rel.from_column} → ${rel.to_table}.${rel.to_column} (${Math.round(rel.match_ratio * 100)}% match)`}
-                  >
-                    <span className="text-[10px] font-bold text-[var(--text-primary)]">{rel.cardinality}</span>
-                    <span className="text-[9px] text-[var(--text-muted)]">·</span>
-                    <span className="text-[10px] font-medium text-emerald-400">
-                      {Math.round(rel.match_ratio * 100)}%
-                    </span>
-                  </div>
-                </foreignObject>
-              </g>
-            );
-          })}
+                  <span className="text-[10px] font-bold text-[var(--text-primary)]">{rel.cardinality}</span>
+                  <span className="text-[9px] text-[var(--text-muted)]">·</span>
+                  <span className="text-[10px] font-medium text-emerald-400">
+                    {Math.round(rel.match_ratio * 100)}%
+                  </span>
+                </div>
+              </foreignObject>
+            </g>
+          ))}
         </svg>
 
         {/* Entity Cards */}
-        {Object.values(tables).map((table) => (
-          <TableEntityCard
-            key={table.table_name}
-            table={table}
-            isSelected={selectedTable === table.table_name}
-            onSelect={() => setSelectedTable(table.table_name)}
-            onDelete={() => onDeleteTable(table.table_name)}
-            onStartConnect={(col) => handleStartConnect(table.table_name, col)}
-            onEndConnect={(col) => handleEndConnect(table.table_name, col)}
-            connectingFromCol={
-              connectingSource ? `${connectingSource.table}.${connectingSource.col}` : null
-            }
-            onMouseDownDrag={(e) => startDraggingTable(table.table_name, e)}
-          />
-        ))}
+        {tableList.map((table) => {
+          const handlers = perTableHandlers[table.table_name];
+          return (
+            <TableEntityCard
+              key={table.table_name}
+              table={table}
+              isSelected={selectedTable === table.table_name}
+              onSelect={handlers.onSelect}
+              onDelete={handlers.onDelete}
+              onStartConnect={handlers.onStartConnect}
+              onEndConnect={handlers.onEndConnect}
+              connectingFromCol={connectingFromCol}
+              onMouseDownDrag={handlers.onMouseDownDrag}
+            />
+          );
+        })}
       </div>
     </div>
   );
