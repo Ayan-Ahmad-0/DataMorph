@@ -16,7 +16,8 @@ def test_app_main_line_budget_and_router_registration():
     line_count = len(main_path.read_text(encoding="utf-8").splitlines())
     assert line_count < 250, f"Expected slim app/main.py (<250 lines), found {line_count}"
 
-    route_paths = {route.path for route in app.main.app.routes}
+    route_paths = {getattr(route, "path", None) for route in app.main.app.routes}
+    route_paths.discard(None)
     expected_routes = {
         "/api/health",
         "/api/maintenance/cleanup",
