@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from contextlib import contextmanager
-import json
 import logging
 import os
 import threading
@@ -14,7 +13,7 @@ import duckdb
 from app.models import JobDetailResponse, JobMetadata, JobStatus
 from app.storage import JobStorage, read_json_safe, write_json_atomic
 from core.ai.gemini_client import get_gemini_callable
-from core.ai.generator import AIRecipeGenerator, AIReportResult
+from core.ai.generator import AIRecipeGenerator
 from core.compiler import RecipeCompiler
 from core.converter import Converter
 from core.duckdb_utils import configure_duckdb_connection, get_max_concurrent_pipelines

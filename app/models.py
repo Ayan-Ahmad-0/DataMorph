@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
-from core.recipe_schema import Recipe
 
 
 class JobStatus(str, Enum):
