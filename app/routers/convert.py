@@ -177,6 +177,7 @@ async def execute_convert_only(
 @router.get("/convert/download/{convert_id}")
 def download_converted_file(convert_id: str, user_id: str = Depends(get_current_tenant_id)):
     """Download converted output file(s). Zips if multiple parts were generated."""
+    validate_safe_id(convert_id, label="convert_id")
     convert_jobs = get_convert_jobs()
     job = get_convert_job(convert_jobs, convert_id, user_id)
     if not job:
@@ -196,7 +197,11 @@ def download_converted_file(convert_id: str, user_id: str = Depends(get_current_
         media_type = exporter.mime_type if exporter else "application/octet-stream"
         return FileResponse(path=fpath, media_type=media_type, filename=fpath.name)
 
-    zip_path = job["work_dir"] / f"converted_{Path(job['filename']).stem}_{result.target_format}_parts.zip"
+    zip_name = sanitize_filename(
+        f"converted_{Path(job['filename']).stem}_{result.target_format}_parts.zip",
+        fallback="converted_parts.zip",
+    )
+    zip_path = resolve_within_base(Path(job["work_dir"]), zip_name)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for p in output_files:
             zf.write(p, arcname=p.name)
@@ -210,6 +215,7 @@ def handoff_to_cleaning(
     user_id: str = Depends(get_current_tenant_id),
 ):
     """Handoff converted intermediate Parquet directly to the cleaning pipeline without re-converting."""
+    validate_safe_id(convert_id, label="convert_id")
     convert_jobs = get_convert_jobs()
     orchestrator = get_orchestrator_dep()
     storage = get_storage()

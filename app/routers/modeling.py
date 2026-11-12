@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -11,9 +10,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask as StarletteBackgroundTask
+from starlette.concurrency import run_in_threadpool
 
-from app.dependencies import get_modeling_service
+from app.dependencies import copy_stream_to_path, get_max_upload_bytes, get_modeling_service
 from core.modeling.models import Relationship
+from core.security import sanitize_filename, validate_safe_id
 from core.tenant import get_current_tenant_id
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,11 @@ def get_modeling_session(session_id: str, user_id: str = Depends(get_current_ten
         return state.model_dump()
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to retrieve modeling session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to retrieve modeling session.")
 
 
 @router.post("/sessions/{session_id}/tables")
@@ -53,20 +56,21 @@ async def upload_modeling_table(
 ):
     """Upload a CSV, Parquet, JSON, Excel, or SQLite file into the modeling session."""
     modeling_service = get_modeling_service()
-    suffix = Path(file.filename or "upload").suffix.lower()
+    safe_filename = sanitize_filename(file.filename, fallback="table.csv")
+    suffix = Path(safe_filename).suffix.lower()
 
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        shutil.copyfileobj(file.file, tmp)
         tmp_path = Path(tmp.name)
 
     try:
+        await run_in_threadpool(copy_stream_to_path, file.file, tmp_path, get_max_upload_bytes())
         if suffix in (".db", ".sqlite", ".sqlite3"):
             modeling_service.add_sqlite_database(session_id, tmp_path, user_id=user_id)
         else:
             modeling_service.add_table(
                 session_id=session_id,
                 file_path=tmp_path,
-                original_filename=file.filename or "table",
+                original_filename=safe_filename,
                 table_name=table_name,
                 user_id=user_id,
             )
@@ -75,12 +79,14 @@ async def upload_modeling_table(
         return state.model_dump()
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to add table to session %s: %s", session_id, e)
-        raise HTTPException(status_code=500, detail=f"Failed to add table: {e}")
+        raise HTTPException(status_code=500, detail="Failed to stage uploaded modeling table.")
     finally:
         if tmp_path.exists():
-            tmp_path.unlink()
+            tmp_path.unlink(missing_ok=True)
 
 
 @router.delete("/sessions/{session_id}/tables/{table_name}")
@@ -93,9 +99,11 @@ def delete_modeling_table(session_id: str, table_name: str, user_id: str = Depen
         return state.model_dump()
     except (PermissionError, KeyError):
         raise HTTPException(status_code=404, detail="Modeling session not found or expired.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Failed to remove table %s from session %s: %s", table_name, session_id, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to remove modeling table.")
 
 
 @router.post("/sessions/{session_id}/tables/{table_name}/position")
