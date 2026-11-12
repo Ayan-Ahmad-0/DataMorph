@@ -161,15 +161,15 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
         </Callout>
       )}
 
-      {/* Dropzone Container — Tactile, with radial glow */}
+      {/* Dropzone Container */}
       <div
         onDragEnter={handleDrag}
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-5 sm:p-14 text-center transition-all duration-200 border border-dashed ${
+        className={`bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-5 sm:p-14 text-center transition-all duration-200 border border-dashed ${
           dragActive
-            ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
+            ? 'border-[var(--accent)] bg-[var(--accent-subtle)]'
             : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
         }`}
       >
