@@ -74,9 +74,8 @@ describe('App refresh and session persistence', () => {
           'Your previous cleaning session expired or is no longer available. Upload a file to start a new job.'
         )
       ).toBeTruthy();
+      expect(window.location.hash).toBe('#clean');
     });
-
-    expect(window.location.hash).toBe('#clean');
   });
 });
 
