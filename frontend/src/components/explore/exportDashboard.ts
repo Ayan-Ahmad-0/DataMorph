@@ -562,12 +562,17 @@ ${payloadJson}
           if (spec.chart_type === 'big_number') {
             const val = data.rows && data.rows.length > 0 && data.rows[0].length > 0 ? data.rows[0][0] : 0;
             const formatted = typeof val === 'number' ? Number(val).toLocaleString() : String(val);
-            chartDiv.innerHTML = \`
-              <div class="kpi-container">
-                <div class="kpi-value">\${formatted}</div>
-                <div class="kpi-label">\${spec.title || 'Summary Total'}</div>
-              </div>
-            \`;
+            const kpiBox = document.createElement('div');
+            kpiBox.className = 'kpi-container';
+            const kpiVal = document.createElement('div');
+            kpiVal.className = 'kpi-value';
+            kpiVal.textContent = formatted;
+            const kpiLbl = document.createElement('div');
+            kpiLbl.className = 'kpi-label';
+            kpiLbl.textContent = spec.title || 'Summary Total';
+            kpiBox.appendChild(kpiVal);
+            kpiBox.appendChild(kpiLbl);
+            chartDiv.appendChild(kpiBox);
             return;
           }
 
