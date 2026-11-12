@@ -43,8 +43,10 @@ async def upload_dataset_for_query_only(
 
     convert_jobs = get_convert_jobs()
     query_id = f"query_{uuid.uuid4().hex[:8]}"
-    work_dir = Path("data/query_jobs").resolve() / user_id / query_id
-    input_file_path = work_dir / file.filename
+    safe_filename = sanitize_filename(file.filename, fallback="query_dataset.csv")
+    query_root = Path("data/query_jobs").resolve()
+    work_dir = resolve_within_base(query_root, user_id, query_id)
+    input_file_path = resolve_within_base(work_dir, safe_filename)
 
     parsed_options = None
     if options:
@@ -53,12 +55,13 @@ async def upload_dataset_for_query_only(
         except Exception:
             pass
 
-    suffix = Path(file.filename).suffix.lower()
-    target_parquet = work_dir / f"{Path(file.filename).stem}.parquet"
+    suffix = Path(safe_filename).suffix.lower()
+    target_parquet = resolve_within_base(work_dir, f"{Path(safe_filename).stem}.parquet")
+    max_bytes = get_max_upload_bytes()
 
     def _stage_query_file():
         work_dir.mkdir(parents=True, exist_ok=True)
-        size_bytes = copy_stream_to_path(file.file, input_file_path)
+        size_bytes = copy_stream_to_path(file.file, input_file_path, max_bytes=max_bytes)
         detected_fmt, _ = detect_format(input_file_path)
         if detected_fmt == "unknown" and suffix in (".csv", ".tsv", ".parquet", ".json", ".ndjson", ".xlsx", ".db", ".sqlite"):
             adapter = AdapterRegistry.find_by_extension(suffix)
@@ -79,7 +82,7 @@ async def upload_dataset_for_query_only(
         convert_jobs[query_id] = {
             "id": query_id,
             "user_id": user_id,
-            "filename": file.filename,
+            "filename": safe_filename,
             "work_dir": work_dir,
             "intermediate_parquet": target_parquet,
         }
@@ -87,12 +90,15 @@ async def upload_dataset_for_query_only(
 
         return {
             "query_id": query_id,
-            "filename": file.filename,
+            "filename": safe_filename,
             "row_count": conversion_report.rows,
             "columns": conversion_report.columns,
             "file_size_bytes": size_bytes,
             "detected_format": detected_fmt,
         }
+    except HTTPException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
     except Exception as e:
         shutil.rmtree(work_dir, ignore_errors=True)
         logger.exception("Failed to stage dataset for query: %s", e)
@@ -113,7 +119,8 @@ async def upload_dataset(
 
     orchestrator = get_orchestrator_dep()
     storage = get_storage()
-    ext = Path(file.filename).suffix.lower()
+    safe_filename = sanitize_filename(file.filename, fallback="dataset.csv")
+    ext = Path(safe_filename).suffix.lower()
 
     supported_adapter = (
         (format and AdapterRegistry.get(format))
@@ -133,7 +140,7 @@ async def upload_dataset(
             pass
 
     job = orchestrator.create_job(
-        filename=file.filename,
+        filename=safe_filename,
         file_size=0,
         privacy_mode=privacy_mode,
         format_id=format,
@@ -141,8 +148,12 @@ async def upload_dataset(
         user_id=user_id,
     )
 
-    dest_path = storage.raw_file_path(job.id, file.filename, user_id=user_id)
-    job.file_size_bytes = await run_in_threadpool(copy_stream_to_path, file.file, dest_path)
+    dest_path = storage.raw_file_path(job.id, safe_filename, user_id=user_id)
+    try:
+        job.file_size_bytes = await run_in_threadpool(copy_stream_to_path, file.file, dest_path, get_max_upload_bytes())
+    except Exception:
+        storage.cleanup_job(job.id, user_id=user_id)
+        raise
     orchestrator._save_job_state(job.id)
 
     background_tasks.add_task(orchestrator.run_profile_and_ai_draft, job.id)
