@@ -20,6 +20,8 @@ from core.duckdb_utils import (
 
 logger = logging.getLogger(__name__)
 
+PROFILE_BATCH_SIZE = 15
+
 NULL_TOKENS = ["", "n/a", "na", "null", "none", "-", "?", "undefined", "nan"]
 
 DISPLAY_TOKEN_MAP = {
@@ -221,14 +223,28 @@ class Profiler:
             if progress_callback:
                 progress_callback(52.0, "Duplicate scan complete. Profiling columns...")
 
-            # 3. Profile each column
+            # 3. Profile columns in multi-column batches to minimize full Parquet scans
             columns_profile: Dict[str, ColumnProfile] = {}
-            for idx, col in enumerate(column_names):
-                if progress_callback and col_count > 0:
-                    pct = 52.0 + (idx / col_count) * 43.0
-                    progress_callback(pct, f"Profiling column '{col}' ({idx + 1}/{col_count})...")
-                col_profile = self._profile_column(conn, view_name, col, total_rows)
-                columns_profile[col] = col_profile
+            if total_rows == 0:
+                for col in column_names:
+                    columns_profile[col] = ColumnProfile(
+                        name=col,
+                        inferred_type="string",
+                        total_count=0,
+                        nulls=0,
+                        null_pct=0.0,
+                    )
+            else:
+                for batch_start in range(0, col_count, PROFILE_BATCH_SIZE):
+                    batch = column_names[batch_start : batch_start + PROFILE_BATCH_SIZE]
+                    if progress_callback and col_count > 0:
+                        pct = 52.0 + (batch_start / col_count) * 43.0
+                        progress_callback(
+                            pct,
+                            f"Profiling columns {batch_start + 1}–{batch_start + len(batch)} of {col_count}...",
+                        )
+                    batch_profiles = self._profile_columns_batch(conn, view_name, batch, total_rows)
+                    columns_profile.update(batch_profiles)
 
             if progress_callback:
                 progress_callback(96.0, "Statistical profile ready. Compiling cleaning recipe...")
@@ -259,6 +275,305 @@ class Profiler:
         finally:
             conn.close()
 
+    @staticmethod
+    def _quote_ident(col_name: str) -> str:
+        return f'"{col_name.replace(chr(34), chr(34) * 2)}"'
+
+    def _profile_columns_batch(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        view_name: str,
+        batch_cols: List[str],
+        total_rows: int,
+    ) -> Dict[str, ColumnProfile]:
+        """Compute Phase 1 counts, Phase 2 type inference, and numeric stats in batched DuckDB scans."""
+        null_token_sql = ",".join(f"'{t}'" for t in NULL_TOKENS)
+        num_tokens = len(NULL_TOKENS)
+        stride_p1 = 3 + num_tokens
+
+        # Phase 1: Single full scan across all columns in the batch
+        p1_exprs: List[str] = []
+        for idx, col_name in enumerate(batch_cols):
+            quoted = self._quote_ident(col_name)
+            str_val = f"try_cast({quoted} AS VARCHAR)"
+            distinct_expr = (
+                f"COUNT(DISTINCT {quoted})"
+                if total_rows <= 100000
+                else f"APPROX_COUNT_DISTINCT({quoted})"
+            )
+            p1_exprs.append(f"COUNT({quoted}) AS c{idx}_nn")
+            p1_exprs.append(f"{distinct_expr} AS c{idx}_dist")
+            p1_exprs.append(
+                f"SUM(CASE WHEN {quoted} IS NOT NULL AND length({str_val}) != length(trim({str_val})) THEN 1 ELSE 0 END) AS c{idx}_ws"
+            )
+            for t_idx, tok in enumerate(NULL_TOKENS):
+                p1_exprs.append(
+                    f"SUM(CASE WHEN lower(trim({str_val})) = '{tok}' THEN 1 ELSE 0 END) AS c{idx}_tok{t_idx}"
+                )
+
+        p1_row = conn.execute(f"SELECT {', '.join(p1_exprs)} FROM {view_name};").fetchone()
+
+        phase1_meta: Dict[str, Dict[str, Any]] = {}
+        for idx, col_name in enumerate(batch_cols):
+            quoted = self._quote_ident(col_name)
+            base = idx * stride_p1
+            non_null_count = p1_row[base] or 0
+            distinct_count = p1_row[base + 1] or 0
+            ws_issues = p1_row[base + 2] or 0
+
+            token_counts: Dict[str, int] = {}
+            for t_idx, tok in enumerate(NULL_TOKENS):
+                val = p1_row[base + 3 + t_idx] or 0
+                if val > 0:
+                    display_tok = DISPLAY_TOKEN_MAP.get(tok, tok)
+                    token_counts[display_tok] = val
+
+            sql_nulls = total_rows - non_null_count
+            pseudo_nulls = sum(token_counts.values())
+            total_nulls = min(total_rows, sql_nulls + pseudo_nulls)
+            null_pct = round((total_nulls / total_rows) * 100, 2)
+
+            if total_nulls == 0 and total_rows > 1:
+                if total_rows <= 100000:
+                    is_candidate_key = distinct_count == total_rows
+                elif distinct_count >= int(total_rows * 0.95):
+                    has_dup = conn.execute(
+                        f"SELECT 1 FROM (SELECT hash({quoted}) AS _h FROM {view_name} GROUP BY _h HAVING COUNT(*) > 1 LIMIT 1)"
+                    ).fetchone()
+                    is_candidate_key = has_dup is None
+                    if is_candidate_key:
+                        distinct_count = total_rows
+                else:
+                    is_candidate_key = False
+            else:
+                is_candidate_key = False
+
+            phase1_meta[col_name] = {
+                "non_null_count": non_null_count,
+                "distinct_count": distinct_count,
+                "ws_issues": ws_issues,
+                "token_counts": token_counts,
+                "total_nulls": total_nulls,
+                "null_pct": null_pct,
+                "is_candidate_key": is_candidate_key,
+            }
+
+        # Phase 2: Batched type inference on a single sample window
+        SAMPLE_SIZE = 100000
+        batch_select_cols = ", ".join(self._quote_ident(c) for c in batch_cols)
+        sample_rel = (
+            f"(SELECT {batch_select_cols} FROM {view_name} LIMIT {SAMPLE_SIZE})"
+            if total_rows > SAMPLE_SIZE
+            else view_name
+        )
+
+        p2_exprs: List[str] = []
+        for idx, col_name in enumerate(batch_cols):
+            quoted = self._quote_ident(col_name)
+            str_val = f"try_cast({quoted} AS VARCHAR)"
+            valid_cond = f"{quoted} IS NOT NULL AND lower(trim({str_val})) NOT IN ({null_token_sql})"
+            p2_exprs.append(f"COUNT(try_cast({quoted} AS BIGINT)) FILTER (WHERE {valid_cond}) AS c{idx}_int")
+            p2_exprs.append(f"COUNT(try_cast({quoted} AS DOUBLE)) FILTER (WHERE {valid_cond}) AS c{idx}_dbl")
+            p2_exprs.append(f"COUNT(try_cast({quoted} AS BOOLEAN)) FILTER (WHERE {valid_cond}) AS c{idx}_bool")
+            p2_exprs.append(f"COUNT(*) FILTER (WHERE {valid_cond}) AS c{idx}_valid")
+
+        p2_row = conn.execute(f"SELECT {', '.join(p2_exprs)} FROM {sample_rel};").fetchone()
+
+        inferred_types: Dict[str, str] = {}
+        sample_valids: Dict[str, int] = {}
+        int_cols: List[str] = []
+        dbl_cols: List[str] = []
+        other_cols: List[str] = []
+
+        for idx, col_name in enumerate(batch_cols):
+            base = idx * 4
+            int_valid = p2_row[base] or 0
+            dbl_valid = p2_row[base + 1] or 0
+            bool_valid = p2_row[base + 2] or 0
+            sample_valid = p2_row[base + 3] or 0
+
+            # Fallback if leading SAMPLE_SIZE rows happened to be all null while non-null rows exist later
+            if sample_valid == 0 and total_rows > SAMPLE_SIZE and phase1_meta[col_name]["non_null_count"] > 0:
+                quoted = self._quote_ident(col_name)
+                str_val = f"try_cast({quoted} AS VARCHAR)"
+                fb_q = f"""
+                    SELECT
+                        COUNT(try_cast({quoted} AS BIGINT)),
+                        COUNT(try_cast({quoted} AS DOUBLE)),
+                        COUNT(try_cast({quoted} AS BOOLEAN)),
+                        COUNT(*)
+                    FROM (SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL LIMIT {SAMPLE_SIZE})
+                    WHERE lower(trim({str_val})) NOT IN ({null_token_sql});
+                """
+                fb_row = conn.execute(fb_q).fetchone()
+                int_valid = fb_row[0] or 0
+                dbl_valid = fb_row[1] or 0
+                bool_valid = fb_row[2] or 0
+                sample_valid = fb_row[3] or 0
+
+            sample_valids[col_name] = sample_valid
+            if sample_valid > 0 and (int_valid / sample_valid) >= 0.85:
+                inferred_types[col_name] = "integer"
+                int_cols.append(col_name)
+            elif sample_valid > 0 and (dbl_valid / sample_valid) >= 0.85:
+                inferred_types[col_name] = "double"
+                dbl_cols.append(col_name)
+            elif sample_valid > 0 and (bool_valid / sample_valid) >= 0.95:
+                inferred_types[col_name] = "boolean"
+            else:
+                inferred_types[col_name] = "string"
+                other_cols.append(col_name)
+
+        # Phase 3a: Batch numeric stats for integers and doubles (1 scan per numeric type in batch)
+        numeric_stats_map: Dict[str, NumericStats] = {}
+        for num_cols, sql_cast, precision in (
+            (int_cols, "BIGINT", None),
+            (dbl_cols, "DOUBLE", 4),
+        ):
+            if not num_cols:
+                continue
+            num_exprs: List[str] = []
+            for idx, col_name in enumerate(num_cols):
+                quoted = self._quote_ident(col_name)
+                cast_expr = f"try_cast({quoted} AS {sql_cast})"
+                med_expr = (
+                    f"MEDIAN({cast_expr})"
+                    if total_rows <= 100000
+                    else f"APPROX_QUANTILE({cast_expr}, 0.5)"
+                )
+                num_exprs.extend([
+                    f"MIN({cast_expr}) AS n{idx}_min",
+                    f"MAX({cast_expr}) AS n{idx}_max",
+                    f"{med_expr} AS n{idx}_med",
+                    f"SUM(CASE WHEN {cast_expr} < 0 THEN 1 ELSE 0 END) AS n{idx}_neg",
+                ])
+            num_row = conn.execute(f"SELECT {', '.join(num_exprs)} FROM {view_name};").fetchone()
+            for idx, col_name in enumerate(num_cols):
+                base = idx * 4
+                meta = phase1_meta[col_name]
+                neg_count = num_row[base + 3] or 0
+                valid_candidates = max(
+                    1,
+                    meta["non_null_count"] - sum(c for k, c in meta["token_counts"].items() if k != "<empty>"),
+                )
+                v_min = float(num_row[base]) if num_row[base] is not None else None
+                v_max = float(num_row[base + 1]) if num_row[base + 1] is not None else None
+                v_med = float(num_row[base + 2]) if num_row[base + 2] is not None else None
+                if precision is not None:
+                    v_min = round(v_min, precision) if v_min is not None else None
+                    v_max = round(v_max, precision) if v_max is not None else None
+                    v_med = round(v_med, precision) if v_med is not None else None
+                numeric_stats_map[col_name] = NumericStats(
+                    min=v_min,
+                    max=v_max,
+                    median=v_med,
+                    negatives=neg_count,
+                    negative_pct=round((neg_count / valid_candidates) * 100, 2),
+                )
+
+        # Phase 3b: Date / timestamp checks on non-numeric non-bool columns (on bounded sample)
+        formats_map: Dict[str, List[DateFormatMatch]] = {}
+        tz_map: Dict[str, Optional[str]] = {}
+        amb_map: Dict[str, bool] = {}
+
+        for col_name in other_cols:
+            sample_tested = sample_valids[col_name]
+            if sample_tested <= 0:
+                continue
+            quoted = self._quote_ident(col_name)
+            col_sample = (
+                f"(SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL LIMIT {SAMPLE_SIZE})"
+                if total_rows > SAMPLE_SIZE
+                else f"(SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL)"
+            )
+            fmt_cases = ", ".join(
+                [f"COUNT(try_strptime(trim({quoted}), '{fmt}')) AS fmt_{i}" for i, fmt in enumerate(COMMON_DATE_FORMATS)]
+            )
+            try:
+                date_res = conn.execute(f"SELECT {fmt_cases} FROM {col_sample};").fetchone()
+                matched_fmts: List[DateFormatMatch] = []
+                for i, fmt in enumerate(COMMON_DATE_FORMATS):
+                    matched = date_res[i] or 0
+                    pct = round((matched / sample_tested) * 100, 2)
+                    if pct >= 2.0:
+                        matched_fmts.append(DateFormatMatch(format=fmt, match_pct=pct))
+                if matched_fmts:
+                    inferred_types[col_name] = "timestamp"
+                    matched_fmts.sort(key=lambda x: x.match_pct, reverse=True)
+                    formats_map[col_name] = matched_fmts
+
+                    tz_res = conn.execute(
+                        f"""
+                        SELECT
+                            SUM(CASE WHEN {quoted} LIKE '%Z' THEN 1 ELSE 0 END),
+                            SUM(CASE WHEN {quoted} ~ '[+-][0-9]{{2}}:[0-9]{{2}}$' THEN 1 ELSE 0 END)
+                        FROM {col_sample};
+                        """
+                    ).fetchone()
+                    z_cnt = tz_res[0] or 0
+                    offset_cnt = tz_res[1] or 0
+                    if z_cnt > 0 and offset_cnt == 0:
+                        tz_map[col_name] = "UTC (Z suffix)"
+                    elif offset_cnt > 0 and z_cnt == 0:
+                        tz_map[col_name] = "offset"
+                    elif offset_cnt > 0 and z_cnt > 0:
+                        tz_map[col_name] = "mixed"
+                    else:
+                        tz_map[col_name] = "naive"
+
+                    amb_res = conn.execute(
+                        f"""
+                        SELECT
+                            COUNT(try_strptime({quoted}, '%d/%m/%Y')),
+                            COUNT(try_strptime({quoted}, '%m/%d/%Y'))
+                        FROM {col_sample}
+                        WHERE {quoted} LIKE '%/%/%';
+                        """
+                    ).fetchone()
+                    dm_c = amb_res[0] or 0
+                    md_c = amb_res[1] or 0
+                    if dm_c > 0 and dm_c == md_c:
+                        amb_map[col_name] = True
+            except Exception as e:
+                logger.debug("Date format scan skipped for %s: %s", col_name, e)
+
+        # Phase 4: Sample values (bounded window of 2000 rows)
+        results: Dict[str, ColumnProfile] = {}
+        for col_name in batch_cols:
+            sample_values: List[str] = []
+            if not self.privacy_mode:
+                quoted = self._quote_ident(col_name)
+                str_val = f"try_cast({quoted} AS VARCHAR)"
+                sample_q = f"""
+                    SELECT DISTINCT {quoted}
+                    FROM (SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL LIMIT 2000)
+                    WHERE lower(trim({str_val})) NOT IN ({null_token_sql})
+                    LIMIT 5;
+                """
+                sample_rows = conn.execute(sample_q).fetchall()
+                sample_values = [str(r[0]) for r in sample_rows]
+
+            meta = phase1_meta[col_name]
+            results[col_name] = ColumnProfile(
+                name=col_name,
+                inferred_type=inferred_types[col_name],
+                total_count=total_rows,
+                nulls=meta["total_nulls"],
+                null_pct=meta["null_pct"],
+                null_tokens=meta["token_counts"],
+                distinct_count=meta["distinct_count"],
+                candidate_key=meta["is_candidate_key"],
+                whitespace_issues=meta["ws_issues"],
+                casing_issues=0,
+                numeric_stats=numeric_stats_map.get(col_name),
+                formats=formats_map.get(col_name, []),
+                timezone_evidence=tz_map.get(col_name),
+                day_month_ambiguous=amb_map.get(col_name, False),
+                sample_values=sample_values,
+            )
+
+        return results
+
     def _profile_column(
         self,
         conn: duckdb.DuckDBPyConnection,
@@ -267,8 +582,6 @@ class Profiler:
         total_rows: int,
     ) -> ColumnProfile:
         """Inspect and compute statistical distributions for a single column."""
-        quoted = f'"{col_name}"'
-
         if total_rows == 0:
             return ColumnProfile(
                 name=col_name,
@@ -277,226 +590,4 @@ class Profiler:
                 nulls=0,
                 null_pct=0.0,
             )
-
-        # 1. Null, distinct, whitespace, and null token counts
-        str_val = f"try_cast({quoted} AS VARCHAR)"
-        token_cases = ", ".join(
-            [f"SUM(CASE WHEN lower(trim({str_val})) = '{tok}' THEN 1 ELSE 0 END) AS tok_{i}"
-             for i, tok in enumerate(NULL_TOKENS)]
-        )
-
-        # For datasets > 100,000 rows, use HyperLogLog (APPROX_COUNT_DISTINCT).
-        # This uses fixed 16 KB of RAM, preventing disk thrashing and OOM on cloud containers.
-        distinct_expr = f"COUNT(DISTINCT {quoted})" if total_rows <= 100000 else f"APPROX_COUNT_DISTINCT({quoted})"
-
-        query = f"""
-            SELECT
-                COUNT({quoted}) AS non_null_count,
-                {distinct_expr} AS distinct_count,
-                SUM(CASE WHEN {quoted} IS NOT NULL AND length({str_val}) != length(trim({str_val})) THEN 1 ELSE 0 END) AS ws_issues,
-                {token_cases}
-            FROM {view_name};
-        """
-        res = conn.execute(query).fetchone()
-        non_null_count = res[0]
-        distinct_count = res[1]
-        ws_issues = res[2] or 0
-
-        # Null tokens
-        token_counts: Dict[str, int] = {}
-        for i, tok in enumerate(NULL_TOKENS):
-            val = res[3 + i] or 0
-            if val > 0:
-                display_tok = DISPLAY_TOKEN_MAP.get(tok, tok)
-                token_counts[display_tok] = val
-
-        sql_nulls = total_rows - non_null_count
-        # Total effective nulls include true nulls plus null tokens
-        pseudo_nulls = sum(token_counts.values())
-        total_nulls = min(total_rows, sql_nulls + pseudo_nulls)
-        null_pct = round((total_nulls / total_rows) * 100, 2)
-
-        # Candidate key detection: 100% uniqueness with 0 nulls
-        if total_nulls == 0 and total_rows > 1:
-            if total_rows <= 100000:
-                is_candidate_key = (distinct_count == total_rows)
-            else:
-                # Fast candidate key verification for large datasets:
-                # If approx distinct is >= 95% of total, check for any duplicates with short-circuit LIMIT 1
-                if distinct_count >= int(total_rows * 0.95):
-                    has_dup = conn.execute(
-                        f"SELECT 1 FROM (SELECT hash({quoted}) AS _h FROM {view_name} GROUP BY _h HAVING COUNT(*) > 1 LIMIT 1)"
-                    ).fetchone()
-                    is_candidate_key = (has_dup is None)
-                    if is_candidate_key:
-                        distinct_count = total_rows
-                else:
-                    is_candidate_key = False
-        else:
-            is_candidate_key = False
-
-        # 2. Type inference on clean non-null values
-        # For large tables (> 50,000 rows), test candidate types on a statistically representative sample
-        # of up to 100,000 rows to ensure sub-second response on multi-gigabyte datasets without losing precision.
-        SAMPLE_SIZE = 100000
-        if total_rows > SAMPLE_SIZE:
-            sample_subquery = f"(SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL LIMIT {SAMPLE_SIZE})"
-        else:
-            sample_subquery = f"(SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL)"
-
-        type_test_query = f"""
-            SELECT
-                COUNT(try_cast({quoted} AS BIGINT)) AS int_count,
-                COUNT(try_cast({quoted} AS DOUBLE)) AS dbl_count,
-                COUNT(try_cast({quoted} AS BOOLEAN)) AS bool_count,
-                COUNT(*) AS sample_valid
-            FROM {sample_subquery}
-            WHERE lower(trim({str_val})) NOT IN ({','.join(f"'{t}'" for t in NULL_TOKENS)});
-        """
-        type_res = conn.execute(type_test_query).fetchone()
-        int_valid = type_res[0] or 0
-        dbl_valid = type_res[1] or 0
-        bool_valid = type_res[2] or 0
-        sample_valid = type_res[3] or 0
-
-        inferred_type = "string"
-        numeric_stats = None
-        formats: List[DateFormatMatch] = []
-        timezone_evidence = None
-        day_month_ambiguous = False
-
-        if sample_valid > 0 and (int_valid / sample_valid) >= 0.85:
-            inferred_type = "integer"
-            # Compute numeric stats (use O(1) memory APPROX_QUANTILE for large datasets to avoid external disk merge sorts)
-            med_expr = f"MEDIAN(try_cast({quoted} AS BIGINT))" if total_rows <= 100000 else f"APPROX_QUANTILE(try_cast({quoted} AS BIGINT), 0.5)"
-            num_q = f"""
-                SELECT
-                    MIN(try_cast({quoted} AS BIGINT)),
-                    MAX(try_cast({quoted} AS BIGINT)),
-                    {med_expr},
-                    SUM(CASE WHEN try_cast({quoted} AS BIGINT) < 0 THEN 1 ELSE 0 END)
-                FROM {view_name}
-                WHERE try_cast({quoted} AS BIGINT) IS NOT NULL;
-            """
-            num_res = conn.execute(num_q).fetchone()
-            neg_count = num_res[3] or 0
-            valid_candidates = non_null_count - sum(c for k, c in token_counts.items() if k != "<empty>")
-            valid_candidates = max(1, valid_candidates)
-            numeric_stats = NumericStats(
-                min=float(num_res[0]) if num_res[0] is not None else None,
-                max=float(num_res[1]) if num_res[1] is not None else None,
-                median=float(num_res[2]) if num_res[2] is not None else None,
-                negatives=neg_count,
-                negative_pct=round((neg_count / valid_candidates) * 100, 2),
-            )
-        elif sample_valid > 0 and (dbl_valid / sample_valid) >= 0.85:
-            inferred_type = "double"
-            med_expr = f"MEDIAN(try_cast({quoted} AS DOUBLE))" if total_rows <= 100000 else f"APPROX_QUANTILE(try_cast({quoted} AS DOUBLE), 0.5)"
-            num_q = f"""
-                SELECT
-                    MIN(try_cast({quoted} AS DOUBLE)),
-                    MAX(try_cast({quoted} AS DOUBLE)),
-                    {med_expr},
-                    SUM(CASE WHEN try_cast({quoted} AS DOUBLE) < 0 THEN 1 ELSE 0 END)
-                FROM {view_name}
-                WHERE try_cast({quoted} AS DOUBLE) IS NOT NULL;
-            """
-            num_res = conn.execute(num_q).fetchone()
-            neg_count = num_res[3] or 0
-            valid_candidates = non_null_count - sum(c for k, c in token_counts.items() if k != "<empty>")
-            valid_candidates = max(1, valid_candidates)
-            numeric_stats = NumericStats(
-                min=round(float(num_res[0]), 4) if num_res[0] is not None else None,
-                max=round(float(num_res[1]), 4) if num_res[1] is not None else None,
-                median=round(float(num_res[2]), 4) if num_res[2] is not None else None,
-                negatives=neg_count,
-                negative_pct=round((neg_count / valid_candidates) * 100, 2),
-            )
-        elif sample_valid > 0 and (bool_valid / sample_valid) >= 0.95:
-            inferred_type = "boolean"
-        else:
-            # Check for timestamp / date candidates with whitespace tolerance on sample
-            fmt_cases = ", ".join(
-                [f"COUNT(try_strptime(trim({quoted}), '{fmt}')) AS fmt_{i}"
-                 for i, fmt in enumerate(COMMON_DATE_FORMATS)]
-            )
-            date_q = f"SELECT {fmt_cases} FROM {sample_subquery};"
-            try:
-                date_res = conn.execute(date_q).fetchone()
-                sample_tested = sample_valid
-                if sample_tested > 0:
-                    for i, fmt in enumerate(COMMON_DATE_FORMATS):
-                        matched = date_res[i] or 0
-                        pct = round((matched / sample_tested) * 100, 2)
-                        if pct >= 2.0:  # Matches at least 2% of sample
-                            formats.append(DateFormatMatch(format=fmt, match_pct=pct))
-
-                    if formats:
-                        inferred_type = "timestamp"
-                        # Sort by highest match percentage
-                        formats.sort(key=lambda x: x.match_pct, reverse=True)
-
-                        # Test timezone evidence on sample
-                        tz_q = f"""
-                            SELECT
-                                SUM(CASE WHEN {quoted} LIKE '%Z' THEN 1 ELSE 0 END) AS z_count,
-                                SUM(CASE WHEN {quoted} ~ '[+-][0-9]{{2}}:[0-9]{{2}}$' THEN 1 ELSE 0 END) AS offset_count
-                            FROM {sample_subquery};
-                        """
-                        tz_res = conn.execute(tz_q).fetchone()
-                        z_cnt = tz_res[0] or 0
-                        offset_cnt = tz_res[1] or 0
-                        if z_cnt > 0 and offset_cnt == 0:
-                            timezone_evidence = "UTC (Z suffix)"
-                        elif offset_cnt > 0 and z_cnt == 0:
-                            timezone_evidence = "offset"
-                        elif offset_cnt > 0 and z_cnt > 0:
-                            timezone_evidence = "mixed"
-                        else:
-                            timezone_evidence = "naive"
-
-                        # Check day/month ambiguity on sample
-                        amb_q = f"""
-                            SELECT
-                                COUNT(try_strptime({quoted}, '%d/%m/%Y')) AS dm_cnt,
-                                COUNT(try_strptime({quoted}, '%m/%d/%Y')) AS md_cnt
-                            FROM {sample_subquery}
-                            WHERE {quoted} LIKE '%/%/%';
-                        """
-                        amb_res = conn.execute(amb_q).fetchone()
-                        dm_c = amb_res[0] or 0
-                        md_c = amb_res[1] or 0
-                        if dm_c > 0 and dm_c == md_c:
-                            day_month_ambiguous = True
-            except Exception as e:
-                logger.debug("Date format scan skipped: %s", e)
-
-        # 3. Sample values (if privacy_mode is False) - fast sampling from up to 2000 rows
-        sample_values = []
-        if not self.privacy_mode:
-            sample_q = f"""
-                SELECT DISTINCT {quoted}
-                FROM (SELECT {quoted} FROM {view_name} WHERE {quoted} IS NOT NULL LIMIT 2000)
-                WHERE lower(trim({str_val})) NOT IN ({','.join(f"'{t}'" for t in NULL_TOKENS)})
-                LIMIT 5;
-            """
-            sample_rows = conn.execute(sample_q).fetchall()
-            sample_values = [str(r[0]) for r in sample_rows]
-
-        return ColumnProfile(
-            name=col_name,
-            inferred_type=inferred_type,
-            total_count=total_rows,
-            nulls=total_nulls,
-            null_pct=null_pct,
-            null_tokens=token_counts,
-            distinct_count=distinct_count,
-            candidate_key=is_candidate_key,
-            whitespace_issues=ws_issues,
-            casing_issues=0,
-            numeric_stats=numeric_stats,
-            formats=formats,
-            timezone_evidence=timezone_evidence,
-            day_month_ambiguous=day_month_ambiguous,
-            sample_values=sample_values,
-        )
+        return self._profile_columns_batch(conn, view_name, [col_name], total_rows)[col_name]
