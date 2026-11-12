@@ -19,23 +19,9 @@ def validate_tenant_id(tenant_id: Optional[str]) -> str:
     """
     if not tenant_id:
         return DEFAULT_TENANT_ID
-
-
-def resolve_active_tenant_id(header_uid: str, body_uid: Optional[str] = None) -> str:
-    """Resolve effective tenant ID, validating fallback body user_id when header is default."""
-    if header_uid != DEFAULT_TENANT_ID:
-        return header_uid
-    return validate_tenant_id(body_uid) if body_uid else DEFAULT_TENANT_ID
     clean = tenant_id.strip()
     if not clean or clean.lower() in ("default", "anonymous", "none"):
         return DEFAULT_TENANT_ID
-
-
-def resolve_active_tenant_id(header_uid: str, body_uid: Optional[str] = None) -> str:
-    """Resolve effective tenant ID, validating fallback body user_id when header is default."""
-    if header_uid != DEFAULT_TENANT_ID:
-        return header_uid
-    return validate_tenant_id(body_uid) if body_uid else DEFAULT_TENANT_ID
     if not TENANT_ID_REGEX.match(clean):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
