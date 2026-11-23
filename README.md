@@ -66,11 +66,6 @@ Raw Files & Connectors (CSV, Parquet, JSON, NDJSON, XLSX, SQLite, S3, PostgreSQL
 | Storage Retention Daemon | Background scavenger sweeping stale job directories (24h TTL) | Filesystem cleanup / Reclaimed metrics | Disk scavenger (`core/retention.py`) |
 | Multi-Tenancy Isolation | Zero-login tenant partitioning, path traversal defense & OWASP IDOR masking | Regex-validated identity & 404 masking | Partitioned storage (`data/jobs/{user_id}/`) |
 
-### Architecture Diagram
-
-<!-- Add: images/architecture_diagram.png -->
-![Architecture Diagram](images/architecture_diagram.png)
-
 ### Tech Stack
 
 - **Execution Engine** — DuckDB 1.1+ (in-process vectorized columnar SQL, multi-threaded aggregation, >1,300,000 rows/s cleaning throughput, zero network overhead)
@@ -88,17 +83,11 @@ Raw Files & Connectors (CSV, Parquet, JSON, NDJSON, XLSX, SQLite, S3, PostgreSQL
 
 ## Datamorph Web Interface & Analytics Studio
 
-<!-- Add: images/web_interface.png -->
-![Datamorph Web Interface](images/web_interface.png)
-
-<!-- Add: images/erd_studio.png -->
-![Model Data ERD Studio](images/erd_studio.png)
-
-<!-- Add: images/ai_analyst.png -->
-![AI Analyst and SQL Query Studio](images/ai_analyst.png)
-
-<!-- Add: images/visualize_dashboard.png -->
-![Visualize Data Analytics Dashboard](images/visualize_dashboard.png)
+- **Clean Data Studio** — Ingest raw datasets up to 5 GB, inspect AI-compiled cleaning recipes, review confidence scores, and preview deterministic transformations before execution.
+- **Model Data (ERD) Studio** — Interactive visual entity-relationship modeling with draggable schema cards, Bezier relationship links, cross-table join previews, and multi-format schema exports.
+- **Query Data (AI Analyst)** — Natural-language-to-SQL query generation and sandboxed SQL editor powered by DuckDB with AST safety checks and automatic query performance telemetry.
+- **Visualize Data Studio** — Instant analytical chart exploration with auto-detected dimensions, 20-color theme palette, configurable binning/aggregations, and sub-15ms rendering.
+- **Convert Only Studio** — High-throughput format conversion between CSV, Parquet, JSON, NDJSON, Excel, and SQLite without running profiling passes or altering raw cell values.
 
 ---
 
@@ -234,9 +223,6 @@ Direct conversion benchmarks measured on 100,000-row source datasets across all 
 | NDJSON | Parquet (ZSTD) | 100,000 | 0.14s | 714,285 rows/s | < 52 MB |
 | Excel (.xlsx) | Parquet (ZSTD) | 100,000 | 0.85s | 117,647 rows/s | < 94 MB |
 | SQLite (.db) | Parquet (ZSTD) | 100,000 | 0.12s | 833,333 rows/s | < 48 MB |
-
-<!-- Add: images/evaluation_report.png -->
-![Evaluation Report](images/evaluation_report.png)
 
 The most instructive failure mode occurred during timestamp parsing when mixed European (`%d/%m/%Y`) and US (`%m/%d/%Y`) date tokens coincided in the same column. When day tokens did not exceed 12, ambiguous dates could be incorrectly parsed. The engine diagnoses this ambiguity during profiling and injects an explicit human confirmation prompt into the review screen rather than silently guessing.
 
