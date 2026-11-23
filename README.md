@@ -236,7 +236,7 @@ The most instructive failure mode occurred during timestamp parsing when mixed E
 | `profile.json` | Compact statistical summary containing distinct counts, null distributions, numeric percentiles, and format matches |
 | `recipe.json` | Parameterized JSON structure adhering to the Pydantic macro schema |
 | `cleaned.parquet` | Final analytical dataset with concrete DuckDB types (TIMESTAMP, DOUBLE, BIGINT, VARCHAR) and duplicate rows pruned |
-| `cleaned.csv` | Exported standard CSV representation for downstream spreadsheet or BI tool ingestion |
+| `cleaned.csv` | Exported standard CSV representation, for downstream spreadsheet or BI tool ingestion |
 | `verification.json` | Audit record containing before/after row delta counts, duplicate reconciliation, and assertion status |
 | `convert_jobs/{id}/*` | Isolated directory containing direct format conversion outputs and intermediate Parquet buffers (24h TTL auto-purge) |
 | `query_jobs/{id}/*` | Isolated directory containing indexed Parquet datasets for instant Query Data and Visualize Data exploration (24h TTL auto-purge) |
