@@ -16,7 +16,7 @@ from core.ai.gemini_client import get_gemini_callable
 from core.ai.generator import AIRecipeGenerator
 from core.compiler import RecipeCompiler
 from core.converter import Converter
-from core.duckdb_utils import configure_duckdb_connection, get_max_concurrent_pipelines
+from core.duckdb_utils import get_max_concurrent_pipelines
 from core.profiler import Profiler
 from core.recipe_schema import Recipe
 from core.validator import RecipeValidator
@@ -452,14 +452,10 @@ class JobOrchestrator:
                 clean_pq = self.storage.clean_parquet_path(job_id, user_id=job.user_id)
                 clean_res = self.compiler.execute_clean(recipe, staged_pq, clean_pq)
 
-                # Export default cleaned CSV for backwards compatibility
-                clean_csv = self.storage.clean_csv_path(job_id, user_id=job.user_id)
-                clean_pq_sql = str(clean_pq).replace("\\", "/")
-                clean_csv_sql = str(clean_csv).replace("\\", "/")
-                conn = duckdb.connect(":memory:")
-                configure_duckdb_connection(conn)
-                conn.execute(f"COPY (SELECT * FROM read_parquet('{clean_pq_sql}')) TO '{clean_csv_sql}' (HEADER, DELIMITER ',');")
-                conn.close()
+                # CSV export is generated lazily on first download request via
+                # export_dataset() fast-path; skip the synchronous COPY here to
+                # avoid a full parquet→csv scan that adds 2-10 s to every clean job.
+                # (The fast-path in export_dataset checks clean_csv_path existence.)
 
                 # 3. Verification & Delta Comparison
                 job.status = JobStatus.VERIFYING

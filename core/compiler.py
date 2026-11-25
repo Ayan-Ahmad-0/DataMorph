@@ -133,21 +133,34 @@ class RecipeCompiler:
             last_cte_name = "filtered"
 
         # 4. Filled CTE (for imputation: fill_median, fill_mode, fill_value)
+        #    Precompute all aggregate scalars (MEDIAN/MODE) in a dedicated scalar CTE
+        #    so DuckDB materialises them once rather than re-scanning `normalized`
+        #    for every imputed column.
+        scalar_defs: Dict[str, str] = {}  # col -> scalar alias
         impute_replaces = []
         for col, rule in recipe.columns.items():
             if rule.handle_nulls:
                 strat = rule.handle_nulls.strategy
                 qcol = quote_ident(col)
                 if strat == "fill_median":
-                    impute_replaces.append(f"COALESCE({qcol}, (SELECT MEDIAN({qcol}) FROM normalized)) AS {qcol}")
+                    alias = f"_med_{col}"
+                    scalar_defs[alias] = f"MEDIAN({qcol})"
+                    impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_mode":
-                    impute_replaces.append(f"COALESCE({qcol}, (SELECT MODE({qcol}) FROM normalized)) AS {qcol}")
+                    alias = f"_mode_{col}"
+                    scalar_defs[alias] = f"MODE({qcol})"
+                    impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_value":
                     val = rule.handle_nulls.value
                     val_str = f"'{val}'" if isinstance(val, str) else str(val)
                     impute_replaces.append(f"COALESCE({qcol}, {val_str}) AS {qcol}")
 
         if impute_replaces:
+            if scalar_defs:
+                # One single scan of `normalized` to materialise all scalar aggregates
+                scalar_select = ", ".join(f"{expr} AS {alias}" for alias, expr in scalar_defs.items())
+                cte_scalars = f"_impute_scalars AS (\n    SELECT {scalar_select} FROM {last_cte_name}\n)"
+                ctes.append(cte_scalars)
             replace_expr = ", ".join(impute_replaces)
             cte_filled = f"filled AS (\n    SELECT * REPLACE ({replace_expr}) FROM {last_cte_name}\n)"
             ctes.append(cte_filled)

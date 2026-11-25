@@ -6,7 +6,7 @@ import { Disclosure } from '../components/ui/Disclosure';
 import { Tag } from '../components/ui/Tag';
 import { Toggle } from '../components/ui/Toggle';
 import { cleanRuleSentence, formatNumber, pluralize } from '../lib/format';
-import { AlertTriangle, Check, CheckCircle2, CheckSquare, Loader2, Sliders } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, CheckSquare, Code2, Loader2, Sliders } from 'lucide-react';
 
 interface ApprovalPageProps {
   jobData: JobDetailResponse | null;
@@ -617,6 +617,19 @@ export const ApprovalPage: React.FC<ApprovalPageProps> = ({ jobData, onStartClea
             Your original CSV file is never altered or replaced. DuckDB builds the cleaned analytical
             dataset in a dedicated destination path. You can safely inspect and export without risk of data loss.
           </Callout>
+
+          {/* Export as Code availability notice */}
+          <div className="flex items-start gap-3 rounded-lg border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-4 py-3 text-sm">
+            <Code2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--accent-primary)]" />
+            <div>
+              <span className="font-semibold text-[var(--text-primary)]">Export as Code available after cleaning </span>
+              <span className="text-[var(--text-muted)]">
+                — Once cleaning finishes (Step 5), use the{' '}
+                <span className="font-medium text-[var(--text-secondary)]">Export as Code</span> button on the results
+                screen to download this recipe as SQL, dbt, pandas, or Polars.
+              </span>
+            </div>
+          </div>
 
           {/* Advanced Technical Details (Collapsed by default) */}
           <Disclosure
