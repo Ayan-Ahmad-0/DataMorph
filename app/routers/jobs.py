@@ -8,10 +8,11 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app.convert_store import save_convert_job_meta
@@ -23,7 +24,8 @@ from app.dependencies import (
     get_retention_manager,
     get_storage,
 )
-from app.models import JobDetailResponse, JobMetadata
+from app.models import JobDetailResponse, JobMetadata, JobStatus
+from app.storage import read_json_safe
 from core.security import resolve_within_base, sanitize_filename, validate_safe_id
 from core.tenant import get_current_tenant_id
 
@@ -291,4 +293,78 @@ def download_artifact(
     except Exception as e:
         logger.exception("Export failed: %s", e)
         raise HTTPException(status_code=500, detail="Export failed due to an internal error.")
+
+
+@router.post("/jobs/{job_id}/export-code")
+def export_job_as_code(
+    job_id: str,
+    payload: Dict[str, Any] = Body(...),
+    download: Optional[Literal["zip"]] = Query(default=None),
+    user_id: str = Depends(get_current_tenant_id),
+):
+    """Convert a completed job's cleaning recipe into standalone SQL, dbt, pandas, or Polars code."""
+    from core.export.models import ExportCodeRequest
+    from core.export.service import export_recipe_as_code, package_export_zip
+    from core.recipe_schema import Recipe
+
+    validate_safe_id(job_id, label="job_id")
+
+    try:
+        export_request = ExportCodeRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=json.loads(exc.json()))
+
+    orchestrator = get_orchestrator_dep()
+    storage = get_storage()
+    job = orchestrator.get_job(job_id, user_id=user_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired.")
+
+    if job.status not in {JobStatus.DONE, JobStatus.DONE_WITH_WARNINGS}:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Recipe code export is only available after cleaning completes "
+                f"(current status: {job.status.value})."
+            ),
+        )
+
+    raw_recipe = orchestrator.job_recipes.get(job_id)
+    if raw_recipe is None:
+        raise HTTPException(status_code=409, detail="No cleaning recipe is available for this job.")
+
+    try:
+        recipe = raw_recipe if isinstance(raw_recipe, Recipe) else Recipe.model_validate(raw_recipe)
+    except ValidationError as exc:
+        raise HTTPException(status_code=409, detail=f"Job recipe is invalid and cannot be exported: {exc}")
+
+    extra_warnings: List[str] = []
+    history_path = storage.job_dir(job_id, user_id=job.user_id) / "wrangle" / "history.json"
+    wrangle_history = read_json_safe(history_path)
+    if isinstance(wrangle_history, list) and len(wrangle_history) > 0:
+        extra_warnings.append(
+            f"Dataset has {len(wrangle_history)} post-clean Data Wrangler edit(s) not captured in the exported recipe code."
+        )
+
+    response = export_recipe_as_code(
+        recipe,
+        export_request,
+        job_id=job.id,
+        dataset_name=job.filename,
+        profile=orchestrator.job_profiles.get(job_id),
+        extra_warnings=extra_warnings or None,
+    )
+
+    if download == "zip":
+        zip_bytes = package_export_zip(response)
+        return Response(
+            content=zip_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="datamorph_export_{export_request.target}.zip"'
+            },
+        )
+
+    return response
+
 

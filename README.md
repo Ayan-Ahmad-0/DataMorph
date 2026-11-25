@@ -84,10 +84,22 @@ Raw Files & Connectors (CSV, Parquet, JSON, NDJSON, XLSX, SQLite, S3, PostgreSQL
 ## Datamorph Web Interface & Analytics Studio
 
 - **Clean Data Studio** — Ingest raw datasets up to 5 GB, inspect AI-compiled cleaning recipes, review confidence scores, and preview deterministic transformations before execution.
+- **Export as Code** — Convert verified cleaning recipes into standalone DuckDB/Snowflake/BigQuery/PostgreSQL SQL, dbt models (`model.sql` + `schema.yml`), pandas scripts, or Polars scripts from the Results screen, REST API, or CLI.
 - **Model Data (ERD) Studio** — Interactive visual entity-relationship modeling with draggable schema cards, Bezier relationship links, cross-table join previews, and multi-format schema exports.
 - **Query Data (AI Analyst)** — Natural-language-to-SQL query generation and sandboxed SQL editor powered by DuckDB with AST safety checks and automatic query performance telemetry.
 - **Visualize Data Studio** — Instant analytical chart exploration with auto-detected dimensions, 20-color theme palette, configurable binning/aggregations, and sub-15ms rendering.
 - **Convert Only Studio** — High-throughput format conversion between CSV, Parquet, JSON, NDJSON, Excel, and SQLite without running profiling passes or altering raw cell values.
+
+### Export as Code
+
+Completed cleaning jobs (`DONE` or `DONE_WITH_WARNINGS`) can export their validated `Recipe` into portable pipeline code targeting **SQL** (`duckdb`, `snowflake`, `bigquery`, `postgres`), **dbt** (model SQL plus `schema.yml` tests), **pandas**, or **Polars** via `POST /api/jobs/{job_id}/export-code` (append `?download=zip` for a `.zip` archive) or `python -m core.export`:
+
+```bash
+curl -X POST "http://localhost:8000/api/jobs/<job_id>/export-code" \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: <tenant_id>" \
+  -d '{"target": "dbt", "dialect": "snowflake", "include_tests": true, "source_name": "raw.orders"}'
+```
 
 ---
 
