@@ -1,4 +1,4 @@
-import { API_BASE, ApiError, apiFetch, getTenantUserId, parseJsonOrThrow, xhrFormUpload } from './client';
+import { API_BASE, ApiError, apiFetch, getTenantUserId, parseJsonOrThrow, triggerBlobDownload, xhrFormUpload } from './client';
 
 export interface ExportOption {
   format_id: string;
@@ -116,5 +116,57 @@ export async function approveAndClean(jobId: string, recipe?: any): Promise<void
 export function getDownloadUrl(jobId: string, format: string): string {
   const uid = getTenantUserId();
   return `${API_BASE}/api/jobs/${jobId}/download/${format}?user_id=${encodeURIComponent(uid)}`;
+}
+
+export type ExportTarget = 'sql' | 'dbt' | 'pandas' | 'polars';
+export type SqlDialect = 'duckdb' | 'snowflake' | 'bigquery' | 'postgres';
+
+export interface ExportCodeRequest {
+  target: ExportTarget;
+  dialect?: SqlDialect;
+  include_tests?: boolean;
+  source_name?: string;
+}
+
+export interface ExportedFile {
+  name: string;
+  content: string;
+  language: 'sql' | 'yaml' | 'python';
+}
+
+export interface ExportCodeResponse {
+  target: ExportTarget;
+  dialect?: string | null;
+  files: ExportedFile[];
+  warnings: string[];
+}
+
+export async function exportJobAsCode(
+  jobId: string,
+  body: ExportCodeRequest,
+): Promise<ExportCodeResponse> {
+  const res = await apiFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/export-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return parseJsonOrThrow<ExportCodeResponse>(res, 'Failed to export recipe as code.');
+}
+
+export async function downloadExportedCodeZip(
+  jobId: string,
+  body: ExportCodeRequest,
+  filename?: string,
+): Promise<void> {
+  const res = await apiFetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/export-code?download=zip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return triggerBlobDownload(
+    res,
+    filename || `datamorph_export_${body.target}.zip`,
+    'Failed to download exported code archive.',
+  );
 }
 
