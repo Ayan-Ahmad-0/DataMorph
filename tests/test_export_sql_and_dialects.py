@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 import sqlglot
-import yaml
 
 from core.export import ExportCodeRequest, export_recipe_as_code
 from core.recipe_schema import (
@@ -124,7 +123,43 @@ def test_sql_transpiles_and_parses_across_all_dialects(dialect: str):
         assert "TRY_TO_TIMESTAMP" in sql_body
 
 
+def test_dbt_emitter_generates_model_and_schema_structure():
+    recipe = _sample_recipe()
+    recipe.dedupe = DedupeConfig(keys=["order_id", "tenant_id"], keep="first")
+    profile = _sample_profile()
+    profile["columns"]["tenant_id"] = {}
+
+    resp = export_recipe_as_code(
+        recipe,
+        ExportCodeRequest(target="dbt", dialect="duckdb", include_tests=True, source_name="raw.orders"),
+        job_id="job_dbt01",
+        dataset_name="orders.csv",
+        profile=profile,
+    )
+    assert [f.name for f in resp.files] == ["cleaned_orders.sql", "schema.yml"]
+    model_sql = resp.files[0].content
+    schema_yml = resp.files[1].content
+
+    assert "{{ config(materialized='table') }}" in model_sql
+    assert "{{ source('raw', 'orders') }}" in model_sql
+    assert "version: 2" in schema_yml
+    assert "- name: cleaned_orders" in schema_yml
+    assert "dbt_utils.unique_combination_of_columns" in schema_yml
+    assert "not_null" in schema_yml
+    assert "dbt_utils.accepted_range" in schema_yml
+
+    resp_no_tests = export_recipe_as_code(
+        _sample_recipe(),
+        ExportCodeRequest(target="dbt", include_tests=False),
+        job_id="job_dbt02",
+        dataset_name="orders.csv",
+        profile=_sample_profile(),
+    )
+    assert "columns:" not in resp_no_tests.files[1].content
+
+
 def test_dbt_emitter_generates_model_and_valid_schema_yaml():
+    yaml = pytest.importorskip("yaml")
     recipe = _sample_recipe()
     recipe.dedupe = DedupeConfig(keys=["order_id", "tenant_id"], keep="first")
     profile = _sample_profile()
@@ -159,6 +194,7 @@ def test_dbt_emitter_generates_model_and_valid_schema_yaml():
 
 
 def test_dbt_emitter_respects_include_tests_false():
+    yaml = pytest.importorskip("yaml")
     resp = export_recipe_as_code(
         _sample_recipe(),
         ExportCodeRequest(target="dbt", include_tests=False),
