@@ -160,9 +160,9 @@ def render_duckdb_sql_body(
         qcol = quote_ident(step.column)
         strat = step.options.get("strategy")
         if strat == "fill_median":
-            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MEDIAN({qcol}) FROM normalized))"
+            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MEDIAN({qcol}) FROM {last_cte}))"
         elif strat == "fill_mode":
-            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MODE({qcol}) FROM normalized))"
+            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MODE({qcol}) FROM {last_cte}))"
         elif strat == "fill_value":
             val_repr = _format_sql_literal(step.options.get("value"))
             impute_replacements[step.column] = f"COALESCE({qcol}, {val_repr})"
