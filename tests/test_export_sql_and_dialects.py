@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -173,17 +171,8 @@ def test_dbt_emitter_respects_include_tests_false():
 
 
 def test_dbt_compile_with_dbt_duckdb(tmp_path: Path):
-    pytest.importorskip("dbt.cli.main")
-    dbt_exe = shutil.which("dbt")
-    if not dbt_exe:
-        # Fallback to running inside the same Python interpreter's Scripts directory
-        candidate = Path(shutil.which("python") or "").parent / "dbt.exe"
-        if not candidate.exists():
-            import sys
-            candidate = Path(sys.executable).parent / "dbt.exe"
-        if not candidate.exists():
-            pytest.skip("dbt CLI executable not found on PATH")
-        dbt_exe = str(candidate)
+    dbt_cli = pytest.importorskip("dbt.cli.main")
+    pytest.importorskip("dbt.adapters.duckdb")
 
     # Create a minimal dbt project in tmp_path and compile our emitted model
     project_dir = tmp_path / "dbt_proj"
@@ -243,13 +232,10 @@ def test_dbt_compile_with_dbt_duckdb(tmp_path: Path):
     for f in resp.files:
         (models_dir / f.name).write_text(f.content, encoding="utf-8")
 
-    proc = subprocess.run(
-        [dbt_exe, "compile", "--project-dir", str(project_dir), "--profiles-dir", str(profiles_dir)],
-        capture_output=True,
-        text=True,
-        check=False,
+    res = dbt_cli.dbtRunner().invoke(
+        ["compile", "--project-dir", str(project_dir), "--profiles-dir", str(profiles_dir)]
     )
-    assert proc.returncode == 0, f"dbt compile failed:\n{proc.stdout}\n{proc.stderr}"
+    assert res.success, f"dbt compile failed: {res.exception}"
     compiled_sql = (project_dir / "target" / "compiled" / "datamorph_test" / "models" / "cleaned_orders.sql").read_text(
         encoding="utf-8"
     )

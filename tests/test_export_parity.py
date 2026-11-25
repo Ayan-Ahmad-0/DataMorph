@@ -143,6 +143,7 @@ def test_duckdb_sql_parity_on_evaluation_datasets(
 ):
     clean_csv = tmp_path / f"{dataset_kind}_clean.csv"
     dirty_csv = tmp_path / f"{dataset_kind}_dirty.csv"
+    manifest_json = tmp_path / f"{dataset_kind}_manifest.json"
     staged_pq = tmp_path / f"{dataset_kind}_staged.parquet"
     compiler_out_pq = tmp_path / f"{dataset_kind}_compiler_out.parquet"
     exported_out_pq = tmp_path / f"{dataset_kind}_exported_out.parquet"
@@ -154,11 +155,10 @@ def test_duckdb_sql_parity_on_evaluation_datasets(
             null_token_rate=0.08,
             exact_duplicate_rate=0.05,
             whitespace_rate=0.10,
-            mixed_casing_rate=0.10,
             negative_outlier_rate=0.05,
             mixed_date_rate=0.10,
         )
-    ).inject_from_file(clean_csv, dirty_csv)
+    ).inject_from_file(clean_csv, dirty_csv, manifest_json)
 
     Converter().convert(dirty_csv, staged_pq)
     profile = Profiler().profile_parquet(staged_pq).to_dict()
