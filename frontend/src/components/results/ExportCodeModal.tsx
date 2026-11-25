@@ -208,6 +208,7 @@ export const ExportCodeModal: React.FC<ExportCodeModalProps> = ({
   const [downloading, setDownloading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [retryCount, setRetryCount] = useState<number>(0);
 
   const supportsDialect = target === 'sql' || target === 'dbt';
   const supportsTests = target === 'dbt';
@@ -233,27 +234,39 @@ export const ExportCodeModal: React.FC<ExportCodeModalProps> = ({
     return req;
   }, [target, supportsDialect, dialect, supportsTests, includeTests, debouncedSourceName]);
 
-  const fetchExportedCode = useCallback(async () => {
+  const runFetch = useCallback(async (isCancelled: () => boolean) => {
     if (!jobId) return;
     setLoading(true);
     setError(null);
     setCopied(false);
     try {
       const data = await exportJobAsCode(jobId, requestPayload);
+      if (isCancelled()) return;
       setResponse(data);
       setActiveFileIndex(0);
     } catch (err: unknown) {
+      if (isCancelled()) return;
       const message = err instanceof Error ? err.message : 'Failed to generate exported code.';
       setError(message);
     } finally {
-      setLoading(false);
+      if (!isCancelled()) {
+        setLoading(false);
+      }
     }
   }, [jobId, requestPayload]);
 
   useEffect(() => {
     if (!isOpen || !jobId) return;
-    void fetchExportedCode();
-  }, [isOpen, jobId, fetchExportedCode]);
+    let cancelled = false;
+    void Promise.resolve().then(() => {
+      if (!cancelled) {
+        void runFetch(() => cancelled);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, jobId, retryCount, runFetch]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -474,7 +487,7 @@ export const ExportCodeModal: React.FC<ExportCodeModalProps> = ({
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => void fetchExportedCode()}
+                  onClick={() => setRetryCount((c) => c + 1)}
                   leftIcon={<RefreshCw className="w-3.5 h-3.5" />}
                 >
                   Retry
