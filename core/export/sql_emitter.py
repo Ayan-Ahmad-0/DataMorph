@@ -152,17 +152,25 @@ def render_duckdb_sql_body(
             last_cte = "filtered"
 
     # 3. filled CTE (handle_nulls fill_*)
+    # Mirror RecipeCompiler exactly: collect MEDIAN/MODE into a single _impute_scalars
+    # CTE so DuckDB materialises all aggregates in one scan and tie-breaking is
+    # identical to what the compiler produces.
     impute_steps = ir.steps_for_stage("impute")
     impute_replacements: Dict[str, str] = {}
+    scalar_defs: Dict[str, str] = {}  # alias -> aggregate expression
     for step in impute_steps:
         if not step.column:
             continue
         qcol = quote_ident(step.column)
         strat = step.options.get("strategy")
         if strat == "fill_median":
-            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MEDIAN({qcol}) FROM {last_cte}))"
+            alias = f"_med_{step.column}"
+            scalar_defs[alias] = f"MEDIAN({qcol})"
+            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars))"
         elif strat == "fill_mode":
-            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT MODE({qcol}) FROM {last_cte}))"
+            alias = f"_mode_{step.column}"
+            scalar_defs[alias] = f"MODE({qcol})"
+            impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars))"
         elif strat == "fill_value":
             val_repr = _format_sql_literal(step.options.get("value"))
             impute_replacements[step.column] = f"COALESCE({qcol}, {val_repr})"
@@ -172,6 +180,11 @@ def render_duckdb_sql_body(
             raise ValueError(f"Unsupported handle_nulls strategy: {strat}")
 
     if impute_replacements:
+        if scalar_defs:
+            scalar_select = ", ".join(
+                f"{expr} AS {alias}" for alias, expr in scalar_defs.items()
+            )
+            ctes.append(f"_impute_scalars AS (\n    SELECT {scalar_select} FROM {last_cte}\n)")
         ctes.append(_render_projection_cte("filled", last_cte, ir, impute_replacements))
         last_cte = "filled"
 
