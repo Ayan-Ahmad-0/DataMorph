@@ -3,9 +3,10 @@ import { getDownloadUrl, type JobDetailResponse } from '../lib/api';
 import { Button } from '../components/ui/Button';
 import { Tag } from '../components/ui/Tag';
 import { formatNumber, formatPercent } from '../lib/format';
-import { CheckCircle2, AlertTriangle, Download, RotateCcw, FileText, FileCheck, ChevronDown, Terminal, Bot, BarChart3, Database, Sliders, Clock } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Download, RotateCcw, FileText, FileCheck, ChevronDown, Terminal, Bot, BarChart3, Database, Sliders, Clock, Code2 } from 'lucide-react';
 import { SqlQueryBox } from '../components/explore/SqlQueryBox';
 import { ConnectorModal } from '../components/connectors/ConnectorModal';
+import { ExportCodeModal } from '../components/results/ExportCodeModal';
 import { PiiShieldCard } from '../components/privacy/PiiShieldCard';
 import { DataWranglerGrid } from '../components/wrangler/DataWranglerGrid';
 
@@ -19,6 +20,7 @@ interface ResultsPageProps {
 export const ResultsPage: React.FC<ResultsPageProps> = ({ jobData, onRestart, onGoToUpload, onHandoffToVisualize }) => {
   const [showExplore, setShowExplore] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [showExportCodeModal, setShowExportCodeModal] = useState<boolean>(false);
   const [showWrangler, setShowWrangler] = useState<boolean>(true);
   const [exploreInitialMode, setExploreInitialMode] = useState<'ask_ai' | 'sql'>('ask_ai');
   const verification = jobData?.verification;
@@ -184,6 +186,16 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ jobData, onRestart, on
             leftIcon={<Database className="w-4 h-4 text-[#FF4B3E]" />}
           >
             Export to Cloud / DB
+          </Button>
+
+          {/* Export Recipe as Code */}
+          <Button
+            variant="secondary"
+            onClick={() => setShowExportCodeModal(true)}
+            className="h-11 px-4 gap-2 border-[var(--border-hairline)]"
+            leftIcon={<Code2 className="w-4 h-4 text-[#FF4B3E]" />}
+          >
+            Export as Code
           </Button>
         </div>
       </div>
@@ -562,6 +574,14 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ jobData, onRestart, on
         onClose={() => setShowExportModal(false)}
         defaultFilename={jobData?.job?.filename}
         defaultFormat={jobData?.job?.detected_format || defaultFormat}
+      />
+
+      {/* Export Recipe as Code Modal */}
+      <ExportCodeModal
+        jobId={jobId}
+        datasetName={jobData?.job?.filename}
+        isOpen={showExportCodeModal}
+        onClose={() => setShowExportCodeModal(false)}
       />
     </div>
   );
