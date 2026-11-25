@@ -1,5 +1,5 @@
 # Datamorph In-Process Tabular Engineering & Intelligence Workspace
-High-performance tabular workspace unifying multi-format ingestion, single-pass profiling, automated cleaning, relational ERD modeling, sandboxed SQL exploration, instant visualization, and multi-tenant data privacy powered by DuckDB, sqlglot, Plotly, and Google Gemini. Ingests 1 to 5 GB datasets with zero-loss all-varchar staging, models relational ERDs with in-process DuckDB joins, compiles sandboxed analytical charts in <15ms, enforces automated 24-hour TTL storage scavenging, and isolates tenant data across 344 automated tests.
+High-performance tabular workspace unifying multi-format ingestion, single-pass profiling, automated cleaning, relational ERD modeling, sandboxed SQL exploration, instant visualization, and multi-tenant data privacy powered by DuckDB, sqlglot, Plotly, and Google Gemini. Ingests 1 to 5 GB datasets with zero-loss all-varchar staging, models relational ERDs with in-process DuckDB joins, compiles sandboxed analytical charts in <15ms, enforces automated 24-hour TTL storage scavenging, and isolates tenant data across 404 automated tests.
 
 ![DuckDB](https://img.shields.io/badge/DuckDB-1.1+-FFF000?style=flat&logo=duckdb&logoColor=black)
 ![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12%20%7C%203.13-3776AB?style=flat&logo=python&logoColor=white)
@@ -36,7 +36,7 @@ High-performance tabular workspace unifying multi-format ingestion, single-pass 
 12. **Enforce Ephemeral Retention** automatically with an asynchronous background scavenger daemon sweeping dynamic job workspaces (`jobs/`, `convert_jobs/`, `query_jobs/`, `modeling/`) every 30 minutes, purging artifacts older than 24 hours while strictly preserving static benchmark fixtures, reclaiming over 50 GB of disk space.
 13. **Isolate Multi-Tenant Workspaces** automatically with zero-login anonymous UUID persistence in local storage, strict regex path traversal defense, physical storage directory partitioning (`data/jobs/{user_id}/`), and OWASP-compliant 404 Not Found IDOR masking.
 
-Measured on an AMD Ryzen / Intel Core workstation: 15,000,000 rows (1.05 GB) converted in 9.98s, profiled in 63.05s, and cleaned in 11.38s; AI Analyst achieved 100.0% accuracy across a 30-question NL-to-SQL benchmark with 0.026s query latency; chart query compilation and rendering completed in <15ms; 50.35 GB of stale temporary files reclaimed on initial retention sweep; 100% PII masking, 100% IDOR defense, and 100% injection defense across 344 passing automated tests (305 Pytest + 39 Vitest). Deployed locally via Docker Compose and FastAPI.
+Measured on an AMD Ryzen / Intel Core workstation: 15,000,000 rows (1.05 GB) converted in 9.98s, profiled in 63.05s, and cleaned in 11.38s; AI Analyst achieved 100.0% accuracy across a 30-question NL-to-SQL benchmark with 0.026s query latency; chart query compilation and rendering completed in <15ms; 50.35 GB of stale temporary files reclaimed on initial retention sweep; 100% PII masking, 100% IDOR defense, and 100% injection defense across 404 passing automated tests (353 passed Pytest + 51 passed Vitest; 2 optional pandas/polars parity tests skipped). Deployed locally via Docker Compose and FastAPI.
 
 ---
 
@@ -70,12 +70,12 @@ Raw Files & Connectors (CSV, Parquet, JSON, NDJSON, XLSX, SQLite, S3, PostgreSQL
 
 - **Execution Engine** — DuckDB 1.1+ (in-process vectorized columnar SQL, multi-threaded aggregation, >1,300,000 rows/s cleaning throughput, zero network overhead)
 - **SQL Security & AST** — sqlglot 30.0+ (strict read-only SELECT validation, 100% forbidden AST node denial rate, 5.0s query timeout ceiling)
-- **Backend Framework** — FastAPI 0.111+, Uvicorn 0.30+, Python 3.11 - 3.13 (305 passing automated unit & integration tests)
+- **Backend Framework** — FastAPI 0.111+, Uvicorn 0.30+, Python 3.11 - 3.13 (353 passing automated unit & integration tests; 2 optional pandas/polars parity tests skipped)
 - **Schema & Validation** — Pydantic v2 (strict allowlist models with `extra="forbid"`, 100% PII redaction for names, emails, phones, SSNs)
 - **Multi-Tenancy & Privacy** — Zero-login client UUIDs in localStorage, OWASP IDOR defense returning 404 Not Found on cross-tenant access, regex directory traversal block, physical filesystem partitioning (`data/jobs/{user_id}/{job_id}/`)
 - **AI Reasoning** — Google GenAI SDK (`gemini-3.5-flash` / `gemini-3-flash-preview`), 30-question NL-to-SQL benchmark set with offline heuristic fallback
 - **Visualization Engine** — Plotly.js, React 19, Lucide Icons, 20-color analytics palette with default histogram `#8F0926`, dedicated 10-query concurrency controller
-- **Frontend Architecture** — React 19, TypeScript 5.0+, Vite, Tailwind CSS (fluid 1600px high-density layout, sub-1s cold build, 39 passing Vitest tests)
+- **Frontend Architecture** — React 19, TypeScript 5.0+, Vite, Tailwind CSS (fluid 1600px high-density layout, sub-1s cold build, 51 passing Vitest tests)
 - **Storage Retention & Scavenger** — Asynchronous background lifecycle daemon (`core/retention.py`), sweeping ephemeral job workspaces every 30 minutes, enforcing 24-hour TTL file evictions, protecting static benchmark fixtures, with on-demand `/api/maintenance/storage` diagnostics
 - **End-to-End Testing** — Playwright (comprehensive ERD canvas drag-and-drop, zoom/pan, modal link, join preview, and handoff assertions)
 
@@ -334,6 +334,19 @@ data-cleaner/
 │   │   ├── gemini_client.py    # Google GenAI SDK interface with model fallback
 │   │   ├── generator.py        # AIRecipeGenerator orchestrator with single-retry logic
 │   │   └── prompts.py          # Grounded prompt templates and privacy masking
+│   ├── export/                 # Recipe-to-code export subsystem (SQL, dbt, pandas, Polars)
+│   │   ├── __init__.py         # Package exports for recipe-to-code emitters and service
+│   │   ├── __main__.py         # CLI entrypoint for recipe-to-code export (`python -m core.export`)
+│   │   ├── base.py             # Base emitter protocol and output container
+│   │   ├── dbt_emitter.py      # dbt model SQL and schema.yml test generator
+│   │   ├── dialects.py         # sqlglot dialect transpilation and compatibility checks
+│   │   ├── headers.py          # Secret-free header comments and safe identifier/filename helpers
+│   │   ├── ir.py               # Recipe-to-IR compiler ordering macros and derived assertions
+│   │   ├── models.py           # Pydantic request/response contracts and export option types
+│   │   ├── pandas_emitter.py   # Standalone string-first pandas script emitter
+│   │   ├── polars_emitter.py   # Standalone string-first Polars lazy-expression script emitter
+│   │   ├── service.py          # High-level code export orchestration and ZIP packager
+│   │   └── sql_emitter.py      # CTE-chain SQL emitter across supported dialects
 │   ├── macros/                 # Deterministic SQL transformation macros
 │   │   ├── base.py             # Macro interface and quote_ident sanitizer
 │   │   ├── dates.py            # Timestamp parsing and timezone normalization
@@ -385,13 +398,15 @@ data-cleaner/
 │   │   │   ├── connectors/     # ConnectorModal for S3 and PostgreSQL ingestion
 │   │   │   ├── explore/        # SqlQueryBox, AskAiTab, and PlotlyChartRenderer
 │   │   │   ├── modeling/       # ErdCanvas, TableEntityCard, RelationshipModal, JoinPreviewDrawer
+│   │   │   ├── results/        # Results view modals and code export UI
+│   │   │   │   └── ExportCodeModal.tsx # Multi-target recipe code preview, copy, and ZIP download modal
 │   │   │   ├── ui/             # Core UI buttons, badges, modals, and callouts
 │   │   │   └── wrangler/       # Interactive cell grid and PII mask controls
 │   │   ├── pages/              # ModelPage, QueryPage, VisualizePage, ConvertPage, UploadPage
 │   │   └── lib/                # API client layer, formatters, and chartColors definitions
 │   ├── package.json            # Node dependency declarations
 │   └── vite.config.ts          # Vite build configuration with proxy support
-├── tests/                      # Pytest test suite (299 unit and integration tests)
+├── tests/                      # Pytest test suite (353 passing tests, 2 optional parity tests skipped)
 │   └── test_retention.py       # Automated 24-hour TTL retention and scavenger lifecycle tests
 ├── .github/workflows/ci.yml    # GitHub Actions multi-version CI workflow (Python 3.11/3.12, Node 20)
 ├── demo.py                     # Autonomous end-to-end CLI demonstration runner
@@ -454,10 +469,10 @@ python demo.py 25000
 
 ### 4. Run full test suite
 ```bash
-# Run backend test suite (305 tests)
+# Run backend test suite (353 passing; 2 optional pandas/polars parity tests skipped unless installed)
 pytest -v tests/
 
-# Run frontend unit test suite (39 tests)
+# Run frontend unit test suite (51 passing)
 cd frontend
 npm install
 npm test -- --run
