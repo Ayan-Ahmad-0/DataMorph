@@ -8,10 +8,11 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app.convert_store import save_convert_job_meta
@@ -23,7 +24,8 @@ from app.dependencies import (
     get_retention_manager,
     get_storage,
 )
-from app.models import JobDetailResponse, JobMetadata
+from app.models import JobDetailResponse, JobMetadata, JobStatus
+from app.storage import read_json_safe
 from core.security import resolve_within_base, sanitize_filename, validate_safe_id
 from core.tenant import get_current_tenant_id
 
