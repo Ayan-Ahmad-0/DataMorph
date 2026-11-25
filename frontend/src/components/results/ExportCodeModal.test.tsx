@@ -133,7 +133,7 @@ describe('ExportCodeModal', () => {
     });
 
     expect(screen.getByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText('clean.sql')).toBeInTheDocument();
+    expect(screen.getAllByText('clean.sql').length).toBeGreaterThan(0);
     const pre = document.querySelector('pre');
     expect(pre?.textContent).toContain('WITH staged AS');
   });
@@ -272,7 +272,7 @@ describe('ExportCodeModal', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('clean.sql')).toBeInTheDocument();
+      expect(screen.getAllByText('clean.sql').length).toBeGreaterThan(0);
     });
 
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
@@ -306,7 +306,40 @@ describe('ExportCodeModal', () => {
 
     await waitFor(() => {
       expect(api.exportJobAsCode).toHaveBeenCalledTimes(2);
-      expect(screen.getByText('clean.sql')).toBeInTheDocument();
+      expect(screen.getAllByText('clean.sql').length).toBeGreaterThan(0);
     });
+  });
+
+  it('passes source_name when entered and closes on Close button or Escape', async () => {
+    const onClose = vi.fn();
+    render(
+      <ExportCodeModal
+        isOpen={true}
+        jobId="job_src"
+        onClose={onClose}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(api.exportJobAsCode).toHaveBeenCalledTimes(1);
+    });
+
+    fireEvent.change(screen.getByLabelText('Source table'), {
+      target: { value: 'raw.orders' },
+    });
+
+    await waitFor(() => {
+      expect(api.exportJobAsCode).toHaveBeenLastCalledWith('job_src', {
+        target: 'sql',
+        dialect: 'duckdb',
+        source_name: 'raw.orders',
+      });
+    });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Close$/i }));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
