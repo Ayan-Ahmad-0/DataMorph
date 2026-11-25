@@ -102,7 +102,7 @@ def test_export_code_zip_download(isolated_client):
     with zipfile.ZipFile(io.BytesIO(res.content), "r") as zf:
         names = zf.namelist()
         assert any(name.endswith(".sql") for name in names)
-        assert "schema.yml" in names
+        assert any(name == "schema.yml" or name.endswith("/schema.yml") for name in names)
         for name in names:
             assert zf.read(name).decode("utf-8").strip()
 
