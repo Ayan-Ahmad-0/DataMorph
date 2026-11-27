@@ -42,7 +42,7 @@ export const MultiTableDropzone: React.FC<MultiTableDropzoneProps> = ({
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
       onClick={() => !isUploading && fileInputRef.current?.click()}
-      className={`border-2 border-dashed rounded-xl p-5 text-center transition-all cursor-pointer select-none ${
+      className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer select-none ${
         isDragOver
           ? 'border-[#FF4B3E] bg-[#FF4B3E]/5'
           : 'border-[var(--border-hairline)] hover:border-[var(--text-muted)] bg-[var(--bg-surface)]'
