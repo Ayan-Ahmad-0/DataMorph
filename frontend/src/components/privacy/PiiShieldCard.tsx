@@ -109,8 +109,8 @@ export const PiiShieldCard: React.FC<PiiShieldCardProps> = ({ jobId, onMaskAppli
         <div className="flex items-center gap-3">
           <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-semibold text-[var(--text-primary)]">Privacy Compliance:</span>
-            <span className="text-[var(--text-secondary)]">No sensitive PII detected (GDPR & HIPAA compliant)</span>
+            <span className="font-semibold text-[var(--text-primary)]">PII scan:</span>
+            <span className="text-[var(--text-secondary)]">No sensitive columns detected.</span>
           </div>
         </div>
         <button

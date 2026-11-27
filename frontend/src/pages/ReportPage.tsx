@@ -13,7 +13,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  FileBarChart,
   Filter,
   Loader2,
   Search,
@@ -166,14 +165,14 @@ export const ReportPage: React.FC<ReportPageProps> = ({ jobData, onProceedToAppr
     return (
       <div className="container-shell py-16 sm:py-24 max-w-2xl mx-auto text-center space-y-6">
         <div className="w-16 h-16 rounded-full bg-[var(--accent-subtle)] text-[var(--accent)] flex items-center justify-center mx-auto">
-          <FileBarChart className="w-8 h-8 animate-pulse" />
+          <Loader2 className="w-8 h-8 animate-spin" />
         </div>
         <div className="space-y-2">
           <h2 className="text-2xl sm:text-3xl font-semibold text-[var(--text-primary)] tracking-tight">
-            Profiling Dataset & Analyzing Anomalies
+            Reviewing your data
           </h2>
           <p className="text-base text-[var(--text-secondary)] leading-relaxed max-w-lg mx-auto">
-            {jobData?.job?.current_stage || 'DuckDB single-pass statistical profiling in progress...'}
+            {jobData?.job?.current_stage || 'Checking columns, missing values, and duplicates...'}
           </p>
         </div>
 

@@ -460,7 +460,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
                       <Loader2 className="w-4 h-4 text-[var(--accent)] animate-spin shrink-0" />
                       <span className="font-semibold text-[var(--text-primary)]">
                         {isProcessing
-                          ? `Streaming & converting ${selectedFile.name} to ${targetFormat.toUpperCase()}...`
+                          ? `Converting ${selectedFile.name} to ${targetFormat.toUpperCase()}...`
                           : `Uploading ${selectedFile.name}...`}
                       </span>
                     </div>
@@ -479,11 +479,11 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
                   <div className="flex items-center justify-between text-xs text-[var(--text-muted)] font-mono pt-0.5">
                     <span>
                       {isProcessing
-                        ? 'Converting via streaming engine · Zero-copy'
+                        ? 'Converting data'
                         : `${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes || selectedFile.size)}`}
                     </span>
                     <span>
-                      {isProcessing ? 'Writing output...' : 'Transferring payload'}
+                      {isProcessing ? 'Saving file...' : 'Uploading...'}
                     </span>
                   </div>
                 </div>
@@ -492,7 +492,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
               {/* Action Button Footer */}
               <div className="p-4 hairline-t bg-[var(--bg-subtle)] flex items-center justify-between">
                 <span className="text-xs text-[var(--text-muted)] font-mono">
-                  Engine: In-process streaming
+                  Values are preserved
                 </span>
                 <Button
                   variant="primary"
@@ -520,7 +520,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
                       Conversion Completed
                     </h2>
                     <p className="text-xs sm:text-sm text-[var(--text-muted)] font-mono">
-                      Dataset staged and converted via columnar streaming
+                      Your converted file is ready.
                     </p>
                   </div>
                 </div>
@@ -568,7 +568,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
                     {convertResult.result.elapsed_seconds}s
                   </span>
                   <span className="text-xs text-[var(--text-muted)] mt-2 block font-sans">
-                    Vectorized streaming throughput
+                    Conversion finished
                   </span>
                 </div>
 
@@ -580,7 +580,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
                     {convertResult.result.target_format.toUpperCase()}
                   </span>
                   <span className="text-xs text-[var(--text-muted)] mt-2 block font-sans">
-                    Zero-copy adapter output
+                    Saved in the selected format
                   </span>
                 </div>
 

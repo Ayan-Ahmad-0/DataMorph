@@ -151,7 +151,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
+        expect(screen.getByText('Model your tables')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');

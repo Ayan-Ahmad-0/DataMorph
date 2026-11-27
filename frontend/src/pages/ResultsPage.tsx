@@ -326,7 +326,7 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ jobData, onRestart, on
         </div>
       )}
 
-      {/* GDPR & HIPAA Privacy Shield Card */}
+      {/* Sensitive data scan */}
       <PiiShieldCard jobId={jobId} />
 
       {/* Interactive Data Wrangler Grid */}

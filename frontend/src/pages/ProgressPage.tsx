@@ -21,10 +21,10 @@ interface PipelineStage {
 }
 
 const STAGES: PipelineStage[] = [
-  { id: 'convert', name: 'File Staging', description: 'Converting raw CSV to text Parquet buffers' },
-  { id: 'profile', name: 'Statistical Profiler', description: 'Single-pass scan for nulls, keys, and format drift' },
-  { id: 'clean', name: 'Vectorized Cleaning', description: 'Executing compiled DuckDB CTE transformation chain' },
-  { id: 'verify', name: 'Verification & Reconciliation', description: 'Validating output against recipe assertions' },
+  { id: 'convert', name: 'Prepare file', description: 'Read the uploaded file and prepare its data' },
+  { id: 'profile', name: 'Review data', description: 'Check for missing values, duplicates, and column formats' },
+  { id: 'clean', name: 'Apply cleaning rules', description: 'Apply the rules you approved' },
+  { id: 'verify', name: 'Check results', description: 'Compare the cleaned data with the original' },
 ];
 
 export const ProgressPage: React.FC<ProgressPageProps> = ({
@@ -59,16 +59,15 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
         </div>
         <div className="space-y-2">
           <h2 className="text-2xl sm:text-3xl font-semibold text-[var(--text-primary)]">
-            No Active Cleaning Task
+            No cleaning job yet
           </h2>
           <p className="text-base text-[var(--text-secondary)] leading-relaxed max-w-lg mx-auto">
-            Review and approve your dataset's cleaning recipe in Step 3 to execute the transformation pipeline
-            and monitor stage progress here.
+            Review your data and cleaning plan before starting a cleaning job.
           </p>
         </div>
         {onGoToUpload && (
           <Button size="lg" variant="primary" onClick={onGoToUpload}>
-            Go to Upload (Step 1)
+            Back to upload
           </Button>
         )}
       </div>
@@ -187,13 +186,13 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
 
         {/* Failure Callout Banner */}
         {isFailed && (
-          <Callout variant="danger" title="Pipeline Execution Stopped">
+          <Callout variant="danger" title="          Cleaning stopped">
             <div className="space-y-3">
               <p className="text-sm text-[var(--text-primary)]">
                 {job?.error || currentStageName || 'An error occurred during dataset processing.'}
               </p>
               <p className="text-xs text-[var(--text-secondary)]">
-                The pipeline halted safely to protect dataset integrity. You can retry the cleaning step, return to modify your cleaning recipe, or start fresh with an upload.
+                You can retry, update your cleaning plan, or upload a different file.
               </p>
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 {onRetry && (
@@ -222,10 +221,10 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
           <div className="p-4 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <span className="font-semibold text-[var(--text-primary)] block text-sm sm:text-base">
-                Profiling & Recipe Complete
+                Review your cleaning plan
               </span>
               <span className="text-xs text-[var(--text-muted)]">
-                The dataset has been analyzed and the cleaning recipe drafted. Review and confirm rule parameters before executing.
+                Your data is ready. Review the suggested cleaning rules before applying them.
               </span>
             </div>
             {onGoToApproval && (
@@ -240,10 +239,10 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
         <div className="bg-[var(--bg-surface)] border border-[var(--border-hairline)] rounded-xl overflow-hidden shadow-2xs">
           <div className="p-3.5 sm:p-4 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] font-mono">
-              Pipeline Execution Plan
+              Cleaning steps
             </span>
             <span className="text-xs text-[var(--text-muted)] font-mono">
-              4 Vectorized Stages
+              4 steps
             </span>
           </div>
 
@@ -252,10 +251,10 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
               <thead>
                 <tr className="border-b border-[var(--border-hairline)] text-[var(--text-muted)] font-medium bg-[var(--bg-surface)]">
                   <th className="py-2.5 px-4 font-semibold text-xs uppercase tracking-wider w-[36%] sm:w-[32%] font-mono">
-                    Stage / Step
+                    Step
                   </th>
                   <th className="py-2.5 px-4 font-semibold text-xs uppercase tracking-wider font-mono">
-                    Execution Details
+                    What happens
                   </th>
                   <th className="py-2.5 px-4 font-semibold text-xs uppercase tracking-wider text-right w-[20%] sm:w-[18%] font-mono">
                     Status
@@ -295,9 +294,6 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
                             }`}
                           >
                             {stg.name}
-                          </span>
-                          <span className="font-mono text-xs text-[var(--text-muted)]">
-                            stage: <span className="text-[var(--text-secondary)] font-medium">{stg.id}</span>
                           </span>
                         </div>
                       </td>
@@ -356,10 +352,10 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
           <div className="pt-4 flex items-center justify-between bg-[var(--bg-subtle)] p-5 rounded-xl border border-[var(--border-hairline)]">
             <div>
               <span className="font-semibold text-[var(--text-primary)] block">
-                Cleaning and verification finished!
+                Cleaning complete
               </span>
               <span className="text-xs text-[var(--text-muted)]">
-                Ready to review reconciliation metrics and download cleaned dataset.
+                Review your results and download the cleaned file.
               </span>
             </div>
             <Button
@@ -367,14 +363,14 @@ export const ProgressPage: React.FC<ProgressPageProps> = ({
               size="lg"
               onClick={onProceedToResults}
             >
-              View Cleaning Results & Download
+              View results and download
             </Button>
           </div>
         )}
 
         {/* Reassurance note & Cancel option */}
         <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-sm text-[var(--text-muted)]">
-          <span>Execution occurs in-process with memory spillover protection.</span>
+          <span>Your cleaning job is running.</span>
           {onCancel && (
             <button
               type="button"
