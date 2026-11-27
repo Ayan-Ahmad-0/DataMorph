@@ -165,11 +165,19 @@ def render_duckdb_sql_body(
         strat = step.options.get("strategy")
         if strat == "fill_median":
             alias = f"_med_{step.column}"
-            scalar_defs[alias] = f"MEDIAN({qcol})"
+            scalar_defs[alias] = f"(SELECT MEDIAN({qcol}) FROM {last_cte})"
             impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars))"
         elif strat == "fill_mode":
+            # Deterministic tie-break matching RecipeCompiler: most frequent non-null value,
+            # alphabetically first when counts are equal.
             alias = f"_mode_{step.column}"
-            scalar_defs[alias] = f"MODE({qcol})"
+            scalar_defs[alias] = (
+                f"(SELECT {qcol} FROM {last_cte} "
+                f"WHERE {qcol} IS NOT NULL "
+                f"GROUP BY {qcol} "
+                f"ORDER BY COUNT(*) DESC, {qcol} ASC "
+                f"LIMIT 1)"
+            )
             impute_replacements[step.column] = f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars))"
         elif strat == "fill_value":
             val_repr = _format_sql_literal(step.options.get("value"))
@@ -181,10 +189,11 @@ def render_duckdb_sql_body(
 
     if impute_replacements:
         if scalar_defs:
+            # All exprs are scalar subqueries — no FROM needed; always 1 row.
             scalar_select = ", ".join(
                 f"{expr} AS {alias}" for alias, expr in scalar_defs.items()
             )
-            ctes.append(f"_impute_scalars AS (\n    SELECT {scalar_select} FROM {last_cte}\n)")
+            ctes.append(f"_impute_scalars AS (\n    SELECT {scalar_select}\n)")
         ctes.append(_render_projection_cte("filled", last_cte, ir, impute_replacements))
         last_cte = "filled"
 
