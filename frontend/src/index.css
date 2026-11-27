@@ -174,20 +174,14 @@ select option:disabled {
   align-items: center;
   padding: 3px 10px;
   border-radius: 9999px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   font-family: var(--font-mono);
   letter-spacing: 0.02em;
   border: 1px solid var(--border-hairline);
   background: var(--bg-subtle);
   color: var(--text-muted);
-  transition: all 150ms ease;
   user-select: none;
-}
-
-.format-pill:hover {
-  border-color: var(--border-strong);
-  color: var(--text-secondary);
 }
 
 /* Dropzone radial glow effect */

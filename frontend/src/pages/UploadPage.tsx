@@ -167,7 +167,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
         onDragLeave={handleDrag}
         onDragOver={handleDrag}
         onDrop={handleDrop}
-        className={`bg-[var(--bg-surface)] hairline-border rounded-[var(--radius-md)] p-10 sm:p-14 text-center transition-all border-dashed ${
+        className={`bg-[var(--bg-surface)] hairline-border rounded-[var(--radius-md)] p-8 sm:p-10 text-center transition-all border-dashed ${
           dragActive
             ? 'border-[var(--accent)] bg-[var(--accent-subtle)]'
             : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
@@ -235,12 +235,19 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
               <FileUp className="w-8 h-8 text-[var(--accent)]" />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-2">
               <span className="text-base sm:text-lg font-semibold text-[var(--text-primary)] block tracking-tight">
                 Drag and drop your data file here
               </span>
-              <span className="text-sm text-[var(--text-muted)] block">
-                CSV, TSV, Parquet, JSON, NDJSON, Excel (.xlsx), or SQLite (.db) up to 5 GB
+              <div className="flex flex-wrap justify-center gap-2" aria-label="Supported file formats">
+                {['CSV', 'TSV', 'Parquet', 'JSON', 'NDJSON', 'Excel (.xlsx)', 'SQLite (.db)'].map((format) => (
+                  <span className="format-pill" key={format}>
+                    {format}
+                  </span>
+                ))}
+              </div>
+              <span className="text-xs text-[var(--text-muted)] block">
+                Files up to 5 GB
               </span>
             </div>
 
