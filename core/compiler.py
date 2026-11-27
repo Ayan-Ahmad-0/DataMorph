@@ -148,7 +148,13 @@ class RecipeCompiler:
                     impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_mode":
                     alias = f"_mode_{col}"
-                    scalar_defs[alias] = f"MODE({qcol})"
+                    scalar_defs[alias] = (
+                        f"(SELECT {qcol} FROM {last_cte_name} "
+                        f"WHERE {qcol} IS NOT NULL "
+                        f"GROUP BY {qcol} "
+                        f"ORDER BY COUNT(*) DESC, {qcol} ASC "
+                        f"LIMIT 1)"
+                    )
                     impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_value":
                     val = rule.handle_nulls.value
