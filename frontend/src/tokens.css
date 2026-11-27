@@ -99,7 +99,6 @@
   /* Shadows */
   --shadow-none: none;
   --shadow-popover: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-glow: 0 0 80px -12px rgba(253, 66, 51, 0.15);
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
@@ -155,7 +154,6 @@
 
   /* Shadows - Minimal developer shadow, no neon glow */
   --shadow-popover: 0 4px 20px rgba(0, 0, 0, 0.6);
-  --shadow-glow: none;
   --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 

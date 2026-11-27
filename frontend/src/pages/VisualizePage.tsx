@@ -40,6 +40,7 @@ import {
   Sparkles,
   ShieldCheck,
   Share2,
+  Loader2,
 } from 'lucide-react';
 import { MAX_FILE_SIZE_BYTES } from '../config';
 
@@ -690,7 +691,7 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
           Visualize Your Data
         </h1>
         <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed max-w-2xl">
-          Upload raw datasets up to 5 GB. Instant AI-assisted charts, auto-visualization, interactive tweak panels, and zero cleaning required.
+          Upload a dataset to create charts and explore its values.
         </p>
       </div>
 
@@ -782,7 +783,6 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                         sheetNames.length > 1 ? { sheet: chosenSheet } : { table: chosenTable }
                       );
                     }}
-                    className="shadow-[0_2px_12px_rgba(253,66,51,0.18)] hover:shadow-[0_4px_20px_rgba(253,66,51,0.25)] shrink-0"
                   >
                     {sheetNames.length > 1 ? 'Visualize Selected Sheet' : 'Visualize Selected Table'}
                   </Button>
@@ -819,32 +819,27 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                   fileInputRef.current?.click();
                 }
               }}
-              className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-all duration-200 border border-dashed ${
+              className={`bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-colors duration-200 border border-dashed ${
                 dragActive
                   ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
                   : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
               } ${!isUploading ? 'cursor-pointer' : ''}`}
-              style={{
-                backgroundImage: dragActive
-                  ? undefined
-                  : 'radial-gradient(ellipse at center top, var(--bg-subtle) 0%, transparent 70%)',
-              }}
             >
               {isUploading ? (
                 <div className="space-y-6 py-6 max-w-lg mx-auto text-center" onClick={(e) => e.stopPropagation()}>
                   <div className="w-16 h-16 rounded-[var(--radius-xl)] bg-[var(--accent-subtle)] text-[var(--accent)] flex items-center justify-center mx-auto border border-[var(--accent-border)] shadow-[var(--shadow-card)]">
-                    <BarChart3 className="w-8 h-8 animate-pulse text-[var(--accent)]" />
+                    <Loader2 className="w-8 h-8 animate-spin" />
                   </div>
 
                   <div className="space-y-2">
                     <span className="text-lg sm:text-xl font-semibold text-[var(--text-primary)] block tracking-tight">
                       {uploadStage === 'inspecting'
-                        ? 'Inspecting dataset schema...'
+                        ? 'Inspecting dataset...'
                         : uploadStage === 'uploading'
-                        ? 'Streaming dataset to workspace...'
+                        ? 'Uploading dataset...'
                         : uploadStage === 'converting'
-                        ? 'Processing & converting (zero-copy Parquet)...'
-                        : 'Profiling columns & preparing charts...'}
+                        ? 'Preparing dataset...'
+                        : 'Preparing charts...'}
                     </span>
                     <span className="text-xs sm:text-sm text-[var(--text-muted)] font-mono block">
                       {uploadFileName || stagedFile?.name}
@@ -861,10 +856,10 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                         {uploadStage === 'uploading'
                           ? `${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes || stagedFile?.size || 0)}`
                           : uploadStage === 'converting'
-                          ? 'Zero-copy ingestion & indexing'
+                          ? 'Processing data'
                           : uploadStage === 'generating'
-                          ? 'Compiling visual suggestions'
-                          : 'Validating format'}
+                          ? 'Creating chart suggestions'
+                          : 'Checking file format'}
                       </span>
                       <span className="font-bold text-[var(--text-primary)]">
                         {uploadStage === 'uploading'
@@ -877,11 +872,7 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
 
                     <div className="w-full bg-[var(--bg-subtle)] h-2.5 rounded-full overflow-hidden border border-[var(--border-hairline)] shadow-inner">
                       <div
-                        className={`h-full transition-all duration-200 rounded-full ${
-                          uploadStage === 'converting' || uploadStage === 'generating'
-                            ? 'bg-[var(--accent)] animate-pulse'
-                            : 'bg-gradient-to-r from-[var(--accent)] to-[#ff7b6b]'
-                        }`}
+                        className="h-full bg-[var(--accent)] transition-all duration-200 rounded-full"
                         style={{
                           width:
                             uploadStage === 'converting'
@@ -896,10 +887,10 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
 
                   <p className="text-xs text-[var(--text-muted)] leading-relaxed max-w-md mx-auto">
                     {uploadStage === 'uploading'
-                      ? 'Datasets up to 5 GB stream directly with chunked I/O to avoid browser memory strain.'
+                      ? 'Upload in progress.'
                       : uploadStage === 'converting'
-                      ? 'DuckDB engine is indexing schemas and preparing zero-copy columnar partitions.'
-                      : 'Preparing intelligent distributions, heatmaps, time series, and categorical charts...'}
+                      ? 'Preparing the dataset for charting.'
+                      : 'Creating chart suggestions from your columns.'}
                   </p>
                 </div>
               ) : (
@@ -924,7 +915,6 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                         e.stopPropagation();
                         fileInputRef.current?.click();
                       }}
-                      className="shadow-[0_2px_12px_rgba(253,66,51,0.18)] hover:shadow-[0_4px_20px_rgba(253,66,51,0.25)] transition-shadow duration-200"
                     >
                       Select Dataset File
                     </Button>
@@ -1078,8 +1068,8 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
           ) : (
             <div className="p-12 text-center rounded-xl bg-[var(--bg-surface)] border border-[var(--border-hairline)] text-[var(--text-muted)] space-y-2">
               <BarChart3 className="w-8 h-8 mx-auto text-[var(--text-muted)]" />
-              <p className="text-sm font-medium">No charts currently displayed.</p>
-              <p className="text-xs">Click "Auto-visualize", "Add chart", or describe a chart in the prompt bar above.</p>
+              <p className="text-sm font-medium">No charts yet.</p>
+              <p className="text-xs">Auto-visualize, add a chart, or describe one above.</p>
             </div>
           )}
 

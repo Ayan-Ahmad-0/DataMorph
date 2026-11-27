@@ -200,7 +200,7 @@ export const QueryPage: React.FC<QueryPageProps> = ({
             </h1>
           </div>
           <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed max-w-2xl">
-            Upload any dataset to ask questions in natural English with our AI Analyst or write sandboxed SQL queries directly against your data without cleaning or converting.
+            Upload a dataset to run SQL queries or ask questions in plain language.
           </p>
         </div>
 
@@ -290,16 +290,11 @@ export const QueryPage: React.FC<QueryPageProps> = ({
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
-            className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-all duration-200 border border-dashed cursor-pointer ${
+            className={`bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-colors duration-200 border border-dashed cursor-pointer ${
               dragActive
                 ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
                 : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
             }`}
-            style={{
-              backgroundImage: dragActive
-                ? undefined
-                : 'radial-gradient(ellipse at center top, var(--bg-subtle) 0%, transparent 70%)',
-            }}
             onClick={() => !isUploading && fileInputRef.current?.click()}
           >
             <input
@@ -319,10 +314,10 @@ export const QueryPage: React.FC<QueryPageProps> = ({
                 <div className="space-y-1 text-center">
                   <span className="text-sm font-semibold text-[var(--text-primary)] block">
                     {uploadStage === 'inspecting'
-                      ? 'Inspecting dataset schema...'
+                      ? 'Inspecting dataset...'
                       : uploadStage === 'uploading'
-                      ? 'Streaming dataset to sandbox...'
-                      : 'Indexing & preparing sandbox...'}
+                      ? 'Uploading dataset...'
+                      : 'Preparing dataset...'}
                   </span>
                   <span className="text-xs text-[var(--text-muted)] font-mono block">
                     {uploadStage === 'uploading'
@@ -332,9 +327,7 @@ export const QueryPage: React.FC<QueryPageProps> = ({
                 </div>
                 <div className="w-full bg-[var(--bg-subtle)] h-2 rounded-full overflow-hidden border border-[var(--border-hairline)] shadow-inner">
                   <div
-                    className={`h-full transition-all duration-200 rounded-full ${
-                      uploadStage === 'converting' ? 'bg-[var(--accent)] animate-pulse' : 'bg-[var(--accent)]'
-                    }`}
+                    className="h-full bg-[var(--accent)] transition-all duration-200 rounded-full"
                     style={{ width: `${uploadProgress}%` }}
                   />
                 </div>

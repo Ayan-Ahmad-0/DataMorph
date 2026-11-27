@@ -277,14 +277,14 @@ export const ModelPage: React.FC<ModelPageProps> = ({ onHandoffToQuery }) => {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm sm:text-base font-semibold text-[var(--text-primary)] tracking-tight">
-                  Data Modeler & ERD Studio
+                  Data Model
                 </h2>
                 <span className="text-[10px] sm:text-[11px] font-mono px-2 py-0.5 rounded-full bg-[var(--bg-subtle)] text-[var(--text-secondary)] border border-[var(--border-hairline)]">
                   {tablesCount} {tablesCount === 1 ? 'Table' : 'Tables'} · {relationshipsCount} Links
                 </span>
               </div>
               <p className="text-xs text-[var(--text-muted)] hidden sm:block">
-                Multi-table staging, automated primary/foreign key discovery, and interactive schema modeling.
+                Upload related files to inspect tables and find key relationships.
               </p>
             </div>
           </div>
@@ -460,10 +460,10 @@ export const ModelPage: React.FC<ModelPageProps> = ({ onHandoffToQuery }) => {
                 <Database className="w-7 h-7 sm:w-8 sm:h-8" />
               </div>
               <h3 className="text-base sm:text-lg font-semibold text-[var(--text-primary)] tracking-tight">
-                Build your Relational Data Model
+                Model your tables
               </h3>
               <p className="text-xs text-[var(--text-secondary)] max-w-md mt-1 mb-5 sm:mb-6 leading-relaxed px-2">
-                Upload multiple related datasets (orders, customers, products) to auto-detect Primary Keys and Foreign Key overlap, or inspect your SQLite database schema.
+                Upload related datasets to view their schemas and find key relationships.
               </p>
               <div className="w-full max-w-sm px-2">
                 <MultiTableDropzone

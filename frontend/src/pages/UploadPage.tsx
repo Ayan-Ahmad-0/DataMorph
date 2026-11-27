@@ -6,7 +6,7 @@ import { Callout } from '../components/ui/Callout';
 import { SupportedFileFormats } from '../components/ui/SupportedFileFormats';
 import { Toggle } from '../components/ui/Toggle';
 import { formatBytes } from '../lib/format';
-import { CheckCircle2, Database, FileUp, Shield, UploadCloud, Zap } from 'lucide-react';
+import { CheckCircle2, Database, FileUp, Loader2, Shield, Zap } from 'lucide-react';
 import { ConnectorModal } from '../components/connectors/ConnectorModal';
 
 interface UploadPageProps {
@@ -143,7 +143,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
           Clean Your Data
         </h1>
         <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed max-w-2xl">
-          Upload raw datasets up to 5 GB. Fast out-of-core profiling and AI-assisted cleaning rules.
+          Upload a file to review its profile and choose cleaning rules.
         </p>
       </div>
 
@@ -186,19 +186,19 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
         {uploading ? (
           <div className="space-y-5 py-4 max-w-md mx-auto">
             <div className="w-14 h-14 rounded-[var(--radius-lg)] bg-[var(--accent-subtle)] text-[var(--accent)] flex items-center justify-center mx-auto border border-[var(--accent-border)]">
-              <UploadCloud className="w-7 h-7 animate-pulse" />
+              <Loader2 className="w-7 h-7 animate-spin" />
             </div>
 
             <div className="space-y-1.5 text-center">
               <span className="text-base sm:text-lg font-semibold text-[var(--text-primary)] block">
                 {isServerProcessing
-                  ? 'Staging & profiling dataset on server...'
+                  ? 'Profiling dataset...'
                   : 'Uploading dataset...'}
               </span>
               <p className="text-xs sm:text-sm text-[var(--text-muted)]">
                 {isServerProcessing ? (
                   <span>
-                    Upload 100% complete. DuckDB is inspecting schema & profiling rows...
+                    Upload complete. Profiling dataset...
                   </span>
                 ) : (
                   <span>
@@ -211,9 +211,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
 
             <div className="w-full bg-[var(--bg-subtle)] h-2 rounded-full overflow-hidden border border-[var(--border-hairline)]">
               <div
-                className={`bg-[var(--accent)] h-full transition-all duration-150 rounded-full ${
-                  isServerProcessing ? 'animate-pulse' : ''
-                }`}
+                className="bg-[var(--accent)] h-full transition-all duration-150 rounded-full"
                 style={{ width: `${Math.max(3, uploadProgressPct)}%` }}
               />
             </div>
@@ -222,7 +220,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
               <span>{uploadProgressPct}%</span>
               <span>
                 {isServerProcessing
-                  ? 'Analyzing...'
+                  ? 'Profiling...'
                   : uploadSpeed > 0 && totalBytes > uploadedBytes
                   ? `~${Math.ceil((totalBytes - uploadedBytes) / uploadSpeed)}s remaining`
                   : 'Transferring...'}
@@ -249,7 +247,6 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
                 variant="primary"
                 size="lg"
                 onClick={() => fileInputRef.current?.click()}
-                className="shadow-[0_2px_12px_rgba(253,66,51,0.18)] hover:shadow-[0_4px_20px_rgba(253,66,51,0.25)] transition-shadow duration-200"
               >
                 Select Dataset File
               </Button>
@@ -293,7 +290,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
                     Privacy Mode
                   </span>
                   <span className="text-xs text-[var(--text-muted)] leading-relaxed block">
-                    Your data stays private. The AI only sees column names and summary statistics, never your actual values.
+                    When enabled, sample values are excluded from AI prompts.
                   </span>
                 </div>
               </div>

@@ -21,7 +21,6 @@ import {
   RefreshCw,
   Bot,
   Terminal,
-  UploadCloud,
   BarChart3,
   Database,
 } from 'lucide-react';
@@ -200,8 +199,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
           </h1>
         </div>
         <p className="text-sm sm:text-base text-[var(--text-secondary)] leading-relaxed">
-          High-performance, in-process format conversion.
-          Converts large datasets between CSV, TSV, Parquet, JSON, NDJSON, Excel (.xlsx), and SQLite without running profiling or altering values.
+          Convert between CSV, TSV, Parquet, JSON, NDJSON, Excel, and SQLite without running a cleaning job.
         </p>
       </div>
 
@@ -255,7 +253,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
           {uploading ? (
             <div className="space-y-5 py-4">
               <div className="w-14 h-14 rounded-full bg-[var(--accent-subtle)] text-[var(--accent)] flex items-center justify-center mx-auto">
-                <UploadCloud className="w-7 h-7 animate-pulse" />
+                <Loader2 className="w-7 h-7 animate-spin" />
               </div>
 
               <div className="space-y-1.5">
@@ -473,9 +471,7 @@ export const ConvertPage: React.FC<ConvertPageProps> = ({ onHandoffToClean, onHa
 
                   <div className="w-full bg-[var(--bg-surface)] h-2.5 rounded-full overflow-hidden hairline-border">
                     <div
-                      className={`bg-[var(--accent)] h-full transition-all duration-200 ease-out ${
-                        isProcessing ? 'animate-pulse' : ''
-                      }`}
+                      className="bg-[var(--accent)] h-full transition-all duration-200 ease-out"
                       style={{ width: `${Math.max(convertProgressPct, 6)}%` }}
                     />
                   </div>

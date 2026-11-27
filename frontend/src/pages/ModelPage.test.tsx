@@ -50,7 +50,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
 
       // Wait for session initialization
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Data Model')).toBeInTheDocument();
       });
 
       // Verify sidebar state
@@ -58,7 +58,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       expect(screen.getByText('No tables staged yet.')).toBeInTheDocument();
 
       // Verify main canvas empty state hero
-      expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
+      expect(screen.getByText('Model your tables')).toBeInTheDocument();
       expect(
         screen.getByText(/Upload multiple related datasets \(orders, customers, products\) to auto-detect/i)
       ).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
+        expect(screen.getByText('Model your tables')).toBeInTheDocument();
       });
 
       // Find file inputs in the dropzones
@@ -94,7 +94,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
 
       // Main canvas empty hero disappears and table card appears
       await waitFor(() => {
-        expect(screen.queryByText('Build your Relational Data Model')).not.toBeInTheDocument();
+        expect(screen.queryByText('Model your tables')).not.toBeInTheDocument();
         expect(screen.getAllByText('customers').length).toBeGreaterThan(0);
         expect(screen.getByText('1 Table · 0 Links')).toBeInTheDocument();
       });
@@ -104,7 +104,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
+        expect(screen.getByText('Model your tables')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -127,7 +127,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
+        expect(screen.getByText('Model your tables')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -176,7 +176,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Data Model')).toBeInTheDocument();
       });
 
       // Check badge counter
@@ -438,7 +438,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Data Model')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -467,7 +467,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Data Model')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
