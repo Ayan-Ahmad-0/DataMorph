@@ -111,7 +111,8 @@ def test_sql_transpiles_and_parses_across_all_dialects(dialect: str):
         assert "QUALIFY" not in sql_body.upper()
         assert "ROW_NUMBER() OVER" in sql_body.upper()
         assert "PERCENTILE_CONT(0.5)" in sql_body.upper()
-        assert "MODE() WITHIN GROUP" in sql_body.upper()
+        assert "COUNT(*) DESC" in sql_body.upper()
+        assert "LIMIT 1" in sql_body.upper()
         assert "SELECT * REPLACE" not in sql_body.upper()
         assert any("QUALIFY" in w for w in resp.warnings)
     elif dialect == "bigquery":
