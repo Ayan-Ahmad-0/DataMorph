@@ -45,7 +45,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
   // SCENARIO 1: Empty State & File Ingestion
   // =========================================================================
   describe('Scenario 1: Empty State & File Ingestion', () => {
-    it('renders empty dropzones in both the sidebar and main canvas when tables == 0', async () => {
+    it('keeps the sidebar file-only and shows the upload dropzone on the main canvas when tables == 0', async () => {
       render(<ModelPage />);
 
       // Wait for session initialization
@@ -55,9 +55,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
 
       // Verify sidebar state
       expect(screen.getByText(/Staged Entities \(0\)/i)).toBeInTheDocument();
-      expect(
-        screen.getByText(/No tables staged. Upload multiple CSVs, Parquet, or an SQLite database above./i)
-      ).toBeInTheDocument();
+      expect(screen.getByText('No tables staged yet.')).toBeInTheDocument();
 
       // Verify main canvas empty state hero
       expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
@@ -65,9 +63,9 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
         screen.getByText(/Upload multiple related datasets \(orders, customers, products\) to auto-detect/i)
       ).toBeInTheDocument();
 
-      // Verify dual dropzone instances
+      // Upload stays available on the canvas, not in the file list sidebar.
       const dropzonePrompts = screen.getAllByText('Drop multiple datasets here');
-      expect(dropzonePrompts.length).toBe(2); // One in sidebar, one in canvas center
+      expect(dropzonePrompts.length).toBe(1);
     });
 
     it('transitions UI from Empty to Populated on valid file uploads (CSV, Parquet, Excel, JSON, SQLite)', async () => {

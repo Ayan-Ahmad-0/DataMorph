@@ -415,21 +415,11 @@ export const ModelPage: React.FC<ModelPageProps> = ({ onHandoffToQuery }) => {
             </button>
           </div>
 
-          <div className="p-3 border-b border-[var(--border-hairline)]">
-            <MultiTableDropzone
-              onUploadFiles={async (files) => {
-                await handleUploadFiles(files);
-                setMobileSidebarOpen(false);
-              }}
-              isUploading={isUploading}
-            />
-          </div>
-
           {/* Table List */}
           <div className="flex-1 overflow-y-auto divide-y divide-[var(--border-hairline)]/60">
             {tablesCount === 0 ? (
               <div className="p-5 text-center text-xs text-[var(--text-muted)] font-mono">
-                No tables staged. Upload multiple CSVs, Parquet, or an SQLite database above.
+                No tables staged yet.
               </div>
             ) : (
               Object.values(session!.tables).map((t) => (
