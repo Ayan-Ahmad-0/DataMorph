@@ -106,7 +106,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -129,7 +129,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
@@ -153,7 +153,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       render(<ModelPage />);
 
       await waitFor(() => {
-        expect(screen.getByText('Data Modeler & ERD Studio')).toBeInTheDocument();
+        expect(screen.getByText('Build your Relational Data Model')).toBeInTheDocument();
       });
 
       const fileInputs = document.querySelectorAll('input[type="file"]');
