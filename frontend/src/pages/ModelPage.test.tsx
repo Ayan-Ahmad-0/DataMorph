@@ -60,7 +60,7 @@ describe('Model Data (ERD) Studio - Comprehensive Production Test Suite', () => 
       // Verify main canvas empty state hero
       expect(screen.getByText('Model your tables')).toBeInTheDocument();
       expect(
-        screen.getByText(/Upload multiple related datasets \(orders, customers, products\) to auto-detect/i)
+        screen.getByText(/Upload related datasets to view their schemas and find key relationships\./i)
       ).toBeInTheDocument();
 
       // Upload stays available on the canvas, not in the file list sidebar.

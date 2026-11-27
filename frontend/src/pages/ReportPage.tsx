@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
+  FileBarChart,
   Filter,
   Loader2,
   Search,
