@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
+import { SupportedFileFormats } from '../components/ui/SupportedFileFormats';
 import { Tag } from '../components/ui/Tag';
 import { formatBytes, formatNumber } from '../lib/format';
 import {
@@ -289,7 +290,7 @@ export const QueryPage: React.FC<QueryPageProps> = ({
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
-            className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-10 sm:p-14 text-center transition-all duration-200 border border-dashed cursor-pointer ${
+            className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-all duration-200 border border-dashed cursor-pointer ${
               dragActive
                 ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
                 : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
@@ -344,13 +345,11 @@ export const QueryPage: React.FC<QueryPageProps> = ({
                   <FileUp className="w-8 h-8 text-[var(--accent)]" />
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <span className="text-base sm:text-lg font-semibold text-[var(--text-primary)] block">
                     Drag and drop your dataset here to query
                   </span>
-                  <span className="text-sm text-[var(--text-muted)] block">
-                    CSV, TSV, Parquet, JSON, NDJSON, Excel (.xlsx), or SQLite (.db) up to 5 GB
-                  </span>
+                  <SupportedFileFormats />
                 </div>
 
                 <div className="pt-2 flex flex-wrap items-center justify-center gap-3">

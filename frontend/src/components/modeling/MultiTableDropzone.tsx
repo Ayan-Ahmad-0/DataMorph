@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { UploadCloud, Loader2 } from 'lucide-react';
+import { SupportedFileFormats } from '../ui/SupportedFileFormats';
 
 interface MultiTableDropzoneProps {
   onUploadFiles: (files: File[]) => Promise<void>;
@@ -65,13 +66,14 @@ export const MultiTableDropzone: React.FC<MultiTableDropzoneProps> = ({
           )}
         </div>
 
-        <div>
+        <div className="space-y-2">
           <span className="text-xs font-semibold text-[var(--text-primary)] block">
             {isUploading ? 'Staging & profiling tables...' : 'Drop multiple datasets here'}
           </span>
-          <span className="text-[11px] text-[var(--text-muted)] block mt-0.5">
-            CSV, Parquet, Excel, JSON, or SQLite database
-          </span>
+          <SupportedFileFormats
+            sizeLimit="Up to 5 GB per file"
+            formats={['CSV', 'TSV', 'Parquet', 'JSON', 'NDJSON', 'Excel (.xlsx)', 'SQLite (.db / .sqlite3)']}
+          />
         </div>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { uploadDataset } from '../lib/api';
 import { MAX_FILE_SIZE_BYTES } from '../config';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
+import { SupportedFileFormats } from '../components/ui/SupportedFileFormats';
 import { Toggle } from '../components/ui/Toggle';
 import { formatBytes } from '../lib/format';
 import { CheckCircle2, Database, FileUp, Shield, UploadCloud, Zap } from 'lucide-react';
@@ -239,16 +240,7 @@ export const UploadPage: React.FC<UploadPageProps> = ({ onUploadComplete }) => {
               <span className="text-base sm:text-lg font-semibold text-[var(--text-primary)] block tracking-tight">
                 Drag and drop your data file here
               </span>
-              <div className="flex flex-wrap justify-center gap-2" aria-label="Supported file formats">
-                {['CSV', 'TSV', 'Parquet', 'JSON', 'NDJSON', 'Excel (.xlsx)', 'SQLite (.db)'].map((format) => (
-                  <span className="format-pill" key={format}>
-                    {format}
-                  </span>
-                ))}
-              </div>
-              <span className="text-xs text-[var(--text-muted)] block">
-                Files up to 5 GB
-              </span>
+              <SupportedFileFormats />
             </div>
 
             {/* Primary & Connector CTAs */}

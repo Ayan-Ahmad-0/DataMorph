@@ -29,6 +29,7 @@ import { ExportDashboardModal } from '../components/explore/ExportDashboardModal
 import { DEFAULT_CHART_COLOR } from '../components/explore/chartColors';
 import { Button } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
+import { SupportedFileFormats } from '../components/ui/SupportedFileFormats';
 import { Tag } from '../components/ui/Tag';
 import {
   BarChart3,
@@ -818,7 +819,7 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                   fileInputRef.current?.click();
                 }
               }}
-              className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-10 sm:p-14 text-center transition-all duration-200 border border-dashed ${
+              className={`dropzone-glow bg-[var(--bg-surface)] rounded-[var(--radius-lg)] p-8 sm:p-10 text-center transition-all duration-200 border border-dashed ${
                 dragActive
                   ? 'drag-active border-[var(--accent)] bg-[var(--accent-subtle)]'
                   : 'border-[var(--border-hairline)] hover:border-[var(--border-strong)]'
@@ -907,13 +908,11 @@ export const VisualizePage: React.FC<VisualizePageProps> = ({
                     <BarChart3 className="w-7 h-7 text-[var(--accent)]" />
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <span className="text-base sm:text-lg font-semibold text-[var(--text-primary)] block tracking-tight">
                       Drag and drop your data file here to visualize
                     </span>
-                    <span className="text-sm text-[var(--text-muted)] block">
-                      CSV, TSV, Parquet, JSON, NDJSON, Excel (.xlsx), or SQLite (.db) up to 5 GB
-                    </span>
+                    <SupportedFileFormats />
                   </div>
 
                   <div className="pt-1 flex flex-wrap items-center justify-center gap-3">
