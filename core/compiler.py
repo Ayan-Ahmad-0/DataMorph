@@ -136,9 +136,7 @@ class RecipeCompiler:
         #    Precompute all aggregate scalars (MEDIAN/MODE) in a dedicated scalar CTE
         #    so DuckDB materialises them once rather than re-scanning `normalized`
         #    for every imputed column.
-        # col -> scalar alias; values are scalar subqueries so _impute_scalars
-        # always returns exactly one row with no FROM clause.
-        scalar_defs: Dict[str, str] = {}
+        scalar_defs: Dict[str, str] = {}  # col -> scalar alias
         impute_replaces = []
         for col, rule in recipe.columns.items():
             if rule.handle_nulls:
@@ -146,19 +144,11 @@ class RecipeCompiler:
                 qcol = quote_ident(col)
                 if strat == "fill_median":
                     alias = f"_med_{col}"
-                    scalar_defs[alias] = f"(SELECT MEDIAN({qcol}) FROM {last_cte_name})"
+                    scalar_defs[alias] = f"MEDIAN({qcol})"
                     impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_mode":
-                    # Deterministic tie-break: most frequent non-null value,
-                    # alphabetically first when counts are equal.
                     alias = f"_mode_{col}"
-                    scalar_defs[alias] = (
-                        f"(SELECT {qcol} FROM {last_cte_name} "
-                        f"WHERE {qcol} IS NOT NULL "
-                        f"GROUP BY {qcol} "
-                        f"ORDER BY COUNT(*) DESC, {qcol} ASC "
-                        f"LIMIT 1)"
-                    )
+                    scalar_defs[alias] = f"MODE({qcol})"
                     impute_replaces.append(f"COALESCE({qcol}, (SELECT {alias} FROM _impute_scalars)) AS {qcol}")
                 elif strat == "fill_value":
                     val = rule.handle_nulls.value
@@ -167,9 +157,9 @@ class RecipeCompiler:
 
         if impute_replaces:
             if scalar_defs:
-                # All exprs are scalar subqueries — no FROM needed; always 1 row.
+                # One single scan of `normalized` to materialise all scalar aggregates
                 scalar_select = ", ".join(f"{expr} AS {alias}" for alias, expr in scalar_defs.items())
-                cte_scalars = f"_impute_scalars AS (\n    SELECT {scalar_select}\n)"
+                cte_scalars = f"_impute_scalars AS (\n    SELECT {scalar_select} FROM {last_cte_name}\n)"
                 ctes.append(cte_scalars)
             replace_expr = ", ".join(impute_replaces)
             cte_filled = f"filled AS (\n    SELECT * REPLACE ({replace_expr}) FROM {last_cte_name}\n)"
